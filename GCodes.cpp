@@ -209,7 +209,7 @@ void GCodes::Spin()
 		}
 	}
 
-	if (platform->GetAux()->Status() & byteAvailable)
+	if (!auxGCode->Active() && (platform->GetAux()->Status() & byteAvailable))
 	{
 		int8_t i = 0;
 		do
@@ -314,6 +314,10 @@ bool GCodes::Push()
 	axesRelativeStack[stackPointer] = axesRelative;
 	feedrateStack[stackPointer] = moveBuffer[DRIVES];
 	fileStack[stackPointer].CopyFrom(fileBeingPrinted);
+	if (stackPointer == 0)
+	{
+		fractionOfFilePrinted = fileBeingPrinted.FractionRead();	// save this so that we don't return the fraction of the macro file read
+	}
 	stackPointer++;
 	platform->PushMessageIndent();
 	return true;
@@ -333,6 +337,10 @@ bool GCodes::Pop()
 		return false;
 
 	stackPointer--;
+	if (stackPointer == 0)
+	{
+		fractionOfFilePrinted = -1.0;			// restore live updates of fraction read from the file being printed
+	}
 	drivesRelative = drivesRelativeStack[stackPointer];
 	axesRelative = axesRelativeStack[stackPointer];
 
@@ -2477,7 +2485,11 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 		}
 		break;
 
-    case 119:
+	case 117:	// Display message
+		reprap.SetMessage(gb->GetUnprecedentedString());
+		break;
+
+	case 119:
 		{
 			reply.copy("Endstops - ");
 			char comma = ',';
@@ -2797,6 +2809,17 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			else
 			{
 				reply.printf("Extrusion factor override for extruder %d: %.1f%%\n", extruder, extrusionFactors[extruder] * 100.0);
+			}
+		}
+		break;
+
+	case 300:	// Beep
+		if (gb->Seen('P'))
+		{
+			int ms = gb->GetIValue();
+			if (gb->Seen('S'))
+			{
+				platform->Beep(gb->GetIValue(), ms);
 			}
 		}
 		break;
@@ -3242,7 +3265,68 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 		}
 		break;
 
-    case 906: // Set/report Motor currents
+	case 665: // Set delta configuration
+		{
+			float diagonal, radius;
+			Move *move = reprap.GetMove();
+			move->GetDeltaParameters(diagonal, radius);
+			bool seen = false;
+			if (gb->Seen('L'))
+			{
+				diagonal = gb->GetFValue();
+				seen = true;
+			}
+			if (gb->Seen('R'))
+			{
+				radius = gb->GetFValue();
+				seen = true;
+			}
+			if (seen)
+			{
+				move->SetDeltaParameters(diagonal, radius);
+			}
+			else
+			{
+				reply.printf("Delta diagonal: %.1f, delta radius: %.1f\n", diagonal, radius);
+			}
+		}
+		break;
+
+	case 666: // Set delta endstop adjustments
+	{
+		Move *move = reprap.GetMove();
+		const float *endstopAdjustments = move->GetDeltaEndstopAdjustments();
+		float x = endstopAdjustments[X_AXIS];
+		float y = endstopAdjustments[Y_AXIS];
+		float z = endstopAdjustments[Z_AXIS];
+		bool seen = false;
+		if (gb->Seen('X'))
+		{
+			x = gb->GetFValue();
+			seen = true;
+		}
+		if (gb->Seen('Y'))
+		{
+			y = gb->GetFValue();
+			seen = true;
+		}
+		if (gb->Seen('Z'))
+		{
+			z = gb->GetFValue();
+			seen = true;
+		}
+		if (seen)
+		{
+			move->SetDeltaEndstopAdjustments(x, y, z);
+		}
+		else
+		{
+			reply.printf("Endstop adjustments X: %.1f Y: %.1f Z: %.1f\n", x, y, z);
+		}
+	}
+		break;
+
+	case 906: // Set/report Motor currents
 		{
 			bool seen = false;
 			for(int8_t axis = 0; axis < AXES; axis++)
