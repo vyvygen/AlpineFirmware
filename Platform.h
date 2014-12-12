@@ -561,9 +561,9 @@ public:
 
   // Timing
   
-  float Time(); // Returns elapsed seconds since some arbitrary time
-  void SetInterrupt(float s); // Set a regular interrupt going every s seconds; if s is -ve turn interrupt off
-  //void DisableInterrupts();
+  float Time();								// Returns elapsed seconds since some arbitrary time
+  uint32_t GetInterruptClocks() const;		// Get the interrupt clock count
+  bool ScheduleInterrupt(uint32_t tim);		// Schedule an interrupt at the specified clock count, or return true if it has passed already
   void Tick();
   
   // Communications and data storage
@@ -628,6 +628,8 @@ public:
   float AxisMinimum(int8_t axis) const;
   void SetAxisMinimum(int8_t axis, float value);
   float AxisTotalLength(int8_t axis) const;
+  float GetElasticComp(size_t drive) const;
+  void SetElasticComp(size_t drive, float factor);
 
   // Z probe
 
@@ -671,6 +673,9 @@ public:
   void WriteNvData();
 
   void SetAutoSave(bool enabled);
+
+  // Misc
+  void Beep(int freq, int ms);
 
 //-------------------------------------------------------------------------------------------------------
   
@@ -736,6 +741,8 @@ private:
   float accelerations[DRIVES];
   float driveStepsPerUnit[DRIVES];
   float instantDvs[DRIVES];
+  float elasticComp[DRIVES];
+
   MCP4461 mcpDuet;
   MCP4461 mcpExpansion;
   int8_t slowestDrive;
@@ -1152,8 +1159,17 @@ inline void Platform::PopMessageIndent()
 	messageIndent -= 2;
 }
 
+inline float Platform::GetElasticComp(size_t drive) const
+{
+	return (drive < DRIVES) ? elasticComp[drive] : 0.0;
+}
+
+// Get the interrupt clock count
+inline uint32_t Platform::GetInterruptClocks() const
+{
+	return TC_ReadCV(TC1, 0);
+}
 
 //***************************************************************************************
-
 
 #endif

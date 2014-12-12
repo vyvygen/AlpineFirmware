@@ -236,6 +236,7 @@ void Platform::Init()
 		}
 		Disable(drive);
 		driveEnabled[drive] = false;
+		SetElasticComp(drive, 0.0);
 	}
 
 	for (size_t heater = 0; heater < HEATERS; heater++)
@@ -582,6 +583,13 @@ float Platform::Time()
 	return addToTime + TIME_FROM_REPRAP * (float) now;
 }
 
+void Platform::Beep(int freq, int ms)
+{
+	// Send the beep command to the aux channel. There is no flow control on this port, so it can't block for long.
+	scratchString.printf("{\"beep_freq\":%d,\"beep_length\":%d}\n", freq, ms);
+	aux->Write(scratchString.Pointer(), true);
+}
+
 void Platform::Exit()
 {
 	Message(BOTH_MESSAGE, "Platform class exited.\n");
@@ -702,7 +710,7 @@ void Platform::SoftwareReset(uint16_t reason)
 
 void TC3_Handler()
 {
-	TC_GetStatus(TC1, 0);
+	TC1->TC_CHANNEL[0].TC_IDR = TC_IER_CPAS;	// disable the interrupt
 	reprap.Interrupt();
 }
 
@@ -729,10 +737,9 @@ void Platform::InitialiseInterrupts()
 	// Timer interrupt for stepper motors
 	pmc_set_writeprotect(false);
 	pmc_enable_periph_clk((uint32_t) TC3_IRQn);
-	TC_Configure(TC1, 0, TC_CMR_WAVE | TC_CMR_WAVSEL_UP_RC | TC_CMR_TCCLKS_TIMER_CLOCK4);
-	TC1 ->TC_CHANNEL[0].TC_IER = TC_IER_CPCS;
-	TC1 ->TC_CHANNEL[0].TC_IDR = ~TC_IER_CPCS;
-	SetInterrupt(STANDBY_INTERRUPT_RATE);
+	TC_Configure(TC1, 0, TC_CMR_WAVE | TC_CMR_WAVSEL_UP | TC_CMR_TCCLKS_TIMER_CLOCK1);
+	TC1 ->TC_CHANNEL[0].TC_IDR = ~(uint32_t)0;		// interrupts disabled for now
+	NVIC_EnableIRQ(TC3_IRQn);
 
 	// Timer interrupt to keep the networking timers running (called at 8Hz)
 	pmc_enable_periph_clk((uint32_t) TC4_IRQn);
@@ -755,11 +762,34 @@ void Platform::InitialiseInterrupts()
 	active = true;							// this enables the tick interrupt, which keeps the watchdog happy
 }
 
-//void Platform::DisableInterrupts()
-//{
-//	NVIC_DisableIRQ(TC3_IRQn);
-//	NVIC_DisableIRQ(TC4_IRQn);
-//}
+// Schedule an interrupt at the specified clock count, or return true if that time is imminent or has passed already
+bool Platform::ScheduleInterrupt(uint32_t tim)
+{
+	irqflags_t flags = cpu_irq_save();						// disable interrupts
+	TC_SetRA(TC1, 0, tim);									// set up the compare register
+	TC_GetStatus(TC1, 0);									// clear any pending interrupt
+	int32_t diff = (int32_t)(TC_ReadCV(TC1, 0) - tim);		// see how long we have to go
+	bool ret;
+	if (diff < (VARIANT_MCK/2)/2000000)						// if less than 0.5us or already passed
+	{
+		ret = true;											// tell the caller to simulate an interrupt instead
+	}
+	else
+	{
+		ret = false;
+		TC1 ->TC_CHANNEL[1].TC_IER = TC_IER_CPAS;			// enable the interrupt
+	}
+	cpu_irq_restore(flags);									// restore interrupt enable status
+	return ret;
+}
+
+#if 0	// not used
+void Platform::DisableInterrupts()
+{
+	NVIC_DisableIRQ(TC3_IRQn);
+	NVIC_DisableIRQ(TC4_IRQn);
+}
+#endif
 
 // Process a 1ms tick interrupt
 // This function must be kept fast so as not to disturb the stepper timing, so don't do any floating point maths in here.
@@ -838,21 +868,21 @@ void Platform::Tick()
 #endif
 }
 
-/*static*/uint16_t Platform::GetAdcReading(adc_channel_num_t chan)
+/*static*/ uint16_t Platform::GetAdcReading(adc_channel_num_t chan)
 {
 	uint16_t rslt = (uint16_t) adc_get_channel_value(ADC, chan);
 	adc_disable_channel(ADC, chan);
 	return rslt;
 }
 
-/*static*/void Platform::StartAdcConversion(adc_channel_num_t chan)
+/*static*/ void Platform::StartAdcConversion(adc_channel_num_t chan)
 {
 	adc_enable_channel(ADC, chan);
 	adc_start(ADC );
 }
 
 // Convert an Arduino Due pin number to the corresponding ADC channel number
-/*static*/adc_channel_num_t Platform::PinToAdcChannel(int pin)
+/*static*/ adc_channel_num_t Platform::PinToAdcChannel(int pin)
 {
 	if (pin < A0)
 	{
@@ -1192,23 +1222,6 @@ float Platform::GetFanRPM()
 			: 0.0;															// else assume fan is off or tacho not connected
 }
 
-// Interrupts
-
-void Platform::SetInterrupt(float s) // Seconds
-{
-	if (s <= 0.0)
-	{
-		//NVIC_DisableIRQ(TC3_IRQn);
-		Message(BOTH_ERROR_MESSAGE, "Negative interrupt!\n");
-		s = STANDBY_INTERRUPT_RATE;
-	}
-	uint32_t rc = (uint32_t)( (((long)(TIME_TO_REPRAP*s))*84l)/128l );
-	TC_SetRA(TC1, 0, rc/2); //50% high, 50% low
-	TC_SetRC(TC1, 0, rc);
-	TC_Start(TC1, 0);
-	NVIC_EnableIRQ(TC3_IRQn);
-}
-
 //-----------------------------------------------------------------------------------------------------
 
 FileStore* Platform::GetFileStore(const char* directory, const char* fileName, bool write)
@@ -1402,6 +1415,14 @@ void Platform::SetAtxPower(bool on)
 	digitalWriteNonDue(atxPowerPin, (on) ? HIGH : LOW);
 }
 
+
+void Platform::SetElasticComp(size_t drive, float factor)
+{
+	if (drive < DRIVES)
+	{
+		elasticComp[drive] = factor;
+	}
+}
 
 /*********************************************************************************
 

@@ -290,9 +290,7 @@ bool GCodes::AllMovesAreFinishedAndMoveBufferIsLoaded()
 	reprap.GetMove()->ResumeMoving();
 
 	// Load the last position; If Move can't accept more, return false - should never happen
-	if(!reprap.GetMove()->GetCurrentUserPosition(moveBuffer))
-		return false;
-
+	reprap.GetMove()->GetCurrentUserPosition(moveBuffer);
 	return true;
 }
 
@@ -485,8 +483,7 @@ int GCodes::SetUpMove(GCodeBuffer *gb)
 		return 0;
 
 	// Load the last position and feed rate into moveBuffer; If Move can't accept more, return false
-	if (!reprap.GetMove()->GetCurrentUserPosition(moveBuffer))
-		return 0;
+	reprap.GetMove()->GetCurrentUserPosition(moveBuffer);
 
 	moveBuffer[DRIVES] *= speedFactorChange;		// account for any change in the speed factor since the last move
 	speedFactorChange = 1.0;
@@ -3249,7 +3246,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			}
 			else
 			{
-				reply.printf("A %d sends drive %d forwards.", (int)platform->GetDirectionValue(drive), drive);
+				reply.printf("A %d sends drive %d forwards.\n", (int)platform->GetDirectionValue(drive), drive);
 			}
 		}
 		break;
@@ -3262,6 +3259,21 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 		else
 		{
 			reply.printf("Time allowed to get to temperature: %.1f seconds.\n", platform->TimeToHot());
+		}
+		break;
+
+	case 572: // Set/report elastic compensation
+		if (gb->Seen('P'))
+		{
+			size_t drive = gb->GetIValue();
+			if (gb->Seen('S'))
+			{
+				platform->SetElasticComp(drive, gb->GetFValue());
+			}
+			else
+			{
+				reply.printf("Elastic compensation for drive %u is %.3f\n", drive, platform->GetElasticComp(drive));
+			}
 		}
 		break;
 

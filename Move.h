@@ -33,7 +33,7 @@ public:
     void Init();										// Start me up
     void Spin();										// Called in a tight loop to keep the class going
     void Exit();										// Shut down
-    bool GetCurrentUserPosition(float m[]) const; 		// Return the current position in transformed coords if possible.  Send false otherwise
+    void GetCurrentUserPosition(float m[]) const; 		// Return the position (after all queued moves have been executed) in transformed coords
     void LiveCoordinates(float m[]) const;				// Gives the last point at the end of the last complete DDA transformed to user coords
     void Interrupt();									// The hardware's (i.e. platform's)  interrupt should call this.
     void InterruptTime();								// Test function - not used
@@ -65,7 +65,6 @@ public:
     void Transform(float move[]) const;					// Take a position and apply the bed and the axis-angle compensations
     void InverseTransform(float move[]) const;			// Go from a transformed point back to user coordinates
     void Diagnostics();									// Report useful stuff
-    void UpdateCurrentCoordinates(DDA* runningDDA);		// Turn a DDA value back into a real world coordinate
     static float Normalise(float v[], int8_t dimensions);  	// Normalise a vector to unit length
     static void Absolute(float v[], int8_t dimensions);		// Put a vector in the positive hyperquadrant
     static float Magnitude(const float v[], int8_t dimensions);  // Return the length of a vector
@@ -78,16 +77,18 @@ public:
     void SetDeltaParameters(float diagonal, float radius);
     const float *GetDeltaEndstopAdjustments() const;
     void SetDeltaEndstopAdjustments(float x, float y, float z);
-    void StartNextMove();
+    void StartNextMove(uint32_t startTime);
 
 private:
 
     void BedTransform(float move[]) const;			    // Take a position and apply the bed compensations
-    bool GetCurrentMachinePosition(float m[]);			// Get the current position in untransformed coords if possible. Return false otherwise
-    													// DANGER!!! the above function is mis-named because it has the side-effect of clearing currentFeedrate!!!
+    void GetCurrentMachinePosition(float m[]) const;	// Get the current position in untransformed coords if possible. Return false otherwise
     void InverseBedTransform(float move[]) const;	    // Go from a bed-transformed point back to user coordinates
     void AxisTransform(float move[]) const;			    // Take a position and apply the axis-angle compensations
     void InverseAxisTransform(float move[]) const;	    // Go from an axis transformed point back to user coordinates
+    void BarycentricCoordinates(int8_t p0, int8_t p1,   // Compute the barycentric coordinates of a point in a triangle
+    		int8_t p2, float x, float y, float& l1,     // (see http://en.wikipedia.org/wiki/Barycentric_coordinate_system).
+    		float& l2, float& l3) const;
     float TriangleZ(float x, float y) const;			// Interpolate onto a triangular grid
     bool DDARingAdd();									// Add a processed look-ahead entry to the DDA ring
     DDA* DDARingGet();									// Get the next DDA ring entry to be run
@@ -110,17 +111,23 @@ private:
     bool active;									// Are we live and running?
     float currentFeedrate;							// Err... the current feed rate...
     volatile float liveCoordinates[DRIVES + 1];		// The last endpoint that the machine moved to
-    long nextMachineEndPoints[DRIVES+1];			// The next endpoint in machine coordinates (i.e. steps)
+    int32_t nextMachineEndPoints[DRIVES];			// The next endpoint in machine coordinates (i.e. steps)
     float xBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The X coordinates of the points on the bed at which to probe
     float yBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The Y coordinates of the points on the bed at which to probe
     float zBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The Z coordinates of the points on the bed at which to probe
+    float baryXBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The X coordinates of the triangle corner points
+    float baryYBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The Y coordinates of the triangle corner points
+    float baryZBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The Z coordinates of the triangle corner points
     uint8_t probePointSet[NUMBER_OF_PROBE_POINTS];	// Has the XY of this point been set?  Has the Z been probed?
     float aX, aY, aC; 								// Bed plane explicit equation z' = z + aX*x + aY*y + aC
     float tanXY, tanYZ, tanXZ; 						// Axis compensation - 90 degrees + angle gives angle between axes
     bool identityBedTransform;						// Is the bed transform in operation?
+    float xRectangle, yRectangle;					// The side lengths of the rectangle used for second-degree bed compensation
     volatile float lastZHit;						// The last Z value hit by the probe
     bool zProbing;									// Are we bed probing as well as moving?
     float longWait;									// A long time for things that need to be done occasionally
+
+    float lastMachinePosition[DRIVES + 1];
 
     bool deltaMode;
     float deltaDiagonal;
@@ -144,7 +151,7 @@ inline bool Move::DDARingEmpty() const
 
 inline bool Move::NoLiveMovement() const
 {
-	return currentDda == nullptr && ddaRingGetPointer->GetState() == DDA::empty;
+	return currentDda == nullptr && DDARingEmpty();
 }
 
 inline bool Move::GetDDARingLock()

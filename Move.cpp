@@ -27,30 +27,24 @@ Move::Move(Platform* p, GCodes* g) : currentDda(NULL)
 
 void Move::Init()
 {
-	for(int8_t i = 0; i < DRIVES; i++)
-	{
-		reprap.GetPlatform()->SetDirection(i, FORWARDS);
-	}
-
-	// Empty the ring (TODO: set all status to empty)
-	ddaRingGetPointer = ddaRingAddPointer;
-	ddaRingAddPointer->GetPrevious()->Init();			// set the initial positions
-	currentDda = nullptr;
-
-	ddaRingLocked = false;
-	addNoMoreMoves = false;
-
 	// Put the origin on the lookahead ring with default velocity in the previous
 	// position to the first one that will be used.
 	for(unsigned int i = 0; i < DRIVES; i++)
 	{
 		liveCoordinates[i] = 0.0;
+		nextMachineEndPoints[i] = 0;
+		reprap.GetPlatform()->SetDirection(i, FORWARDS);
 	}
 
-	int8_t slow = reprap.GetPlatform()->SlowestDrive();
-	liveCoordinates[DRIVES] = reprap.GetPlatform()->HomeFeedRate(slow);
+	// Empty the ring (TODO: set all status to empty)
+	ddaRingGetPointer = ddaRingAddPointer;
+	currentDda = nullptr;
 
-	currentFeedrate = -1.0;
+//	ddaRingLocked = false;
+	addNoMoreMoves = false;
+
+	int8_t slow = reprap.GetPlatform()->SlowestDrive();
+	currentFeedrate = liveCoordinates[DRIVES] = reprap.GetPlatform()->HomeFeedRate(slow);
 
 	SetIdentityTransform();
 	tanXY = 0.0;
@@ -67,6 +61,9 @@ void Move::Init()
 		zBedProbePoints[point] = 0.0;
 		probePointSet[point] = unset;
 	}
+
+	xRectangle = 1.0/(0.8*reprap.GetPlatform()->AxisMaximum(X_AXIS));
+	yRectangle = xRectangle;
 
 	lastTime = reprap.GetPlatform()->Time();
 	longWait = lastTime;
@@ -109,7 +106,7 @@ void Move::Spin()
 	if (reprap.GetGCodes()->ReadMove(nextMove, endStopsToCheck))
 	{
 		Transform(nextMove);
-		currentFeedrate = nextMove[DRIVES];		// might be G1 with just an F field
+		nextMachineEndPoints[DRIVES] = nextMove[DRIVES];		// might be G1 with just an F field
 
 		bool noMove = true;
 		DDA *newDda = ddaRingAddPointer;
@@ -146,9 +143,6 @@ void Move::Spin()
 		Absolute(normalisedDirectionVector, DRIVES);
 		float distanceMoved = Normalise(normalisedDirectionVector, DRIVES);
 
-		// Real move - record its feedrate with it, not here.
-		currentFeedrate = -1.0;
-
 		// Get the acceleration
 		float acceleration = VectorBoxIntersection(normalisedDirectionVector, reprap.GetPlatform()->Accelerations(), DRIVES);
 
@@ -182,6 +176,11 @@ void Move::Spin()
 		}
 
 		newDda->Init(nextMachineEndPoints, distanceMoved, speed, acceleration, normalisedDirectionVector, endStopsToCheck, limitDda);
+	}
+
+	if (currentDda == nullptr)
+	{
+		StartNextMove(reprap.GetPlatform()->GetInterruptClocks());		// start the next move if none is executing already
 	}
 	reprap.GetPlatform()->ClassReport("Move", longWait);
 }
@@ -256,22 +255,37 @@ void Move::Absolute(float v[], int8_t dimensions)
 	}
 }
 
-#if 0
+
 // These are the actual numbers we want in the positions, so don't transform them.
 void Move::SetPositions(float move[])
 {
-	for(uint8_t drive = 0; drive < DRIVES; drive++)
+	if (DDARingEmpty())
 	{
-		lastMove->SetDriveCoordinate(move[drive], drive);
+		DDA *lastMove = ddaRingAddPointer->GetPrevious();
+		for(uint8_t drive = 0; drive < DRIVES; drive++)
+		{
+			lastMove->SetDriveCoordinate(move[drive], drive);
+		}
+		lastMove->SetFeedRate(move[DRIVES]);
 	}
-	lastMove->SetFeedRate(move[DRIVES]);
+	else
+	{
+		reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "SetPositions called when DDA ring not empty\n");
+	}
 }
 
 void Move::SetFeedrate(float feedRate)
 {
-	lastMove->SetFeedRate(feedRate);
+	if (DDARingEmpty())
+	{
+		DDA *lastMove = ddaRingAddPointer->GetPrevious();
+		lastMove->SetFeedRate(feedRate);
+	}
+	else
+	{
+		reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "SetFeedrate called when DDA ring not empty\n");
+	}
 }
-#endif
 
 void Move::Diagnostics()
 {
@@ -370,7 +384,7 @@ float Move::AxisCompensation(int8_t axis) const
 			return tanXZ;
 
 		default:
-			reprap.GetPlatform()->Message(HOST_MESSAGE, "Axis compensation requested for non-existent axis.");
+			reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "Axis compensation requested for non-existent axis.\n");
 	}
 	return 0.0;
 }
@@ -390,6 +404,121 @@ void Move::SetAxisCompensation(int8_t axis, float tangent)
 		break;
 	default:
 		reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "SetAxisCompensation: dud axis.\n");
+	}
+}
+
+void Move::BarycentricCoordinates(int8_t p1, int8_t p2, int8_t p3, float x, float y, float& l1, float& l2, float& l3) const
+{
+	float y23 = baryYBedProbePoints[p2] - baryYBedProbePoints[p3];
+	float x3 = x - baryXBedProbePoints[p3];
+	float x32 = baryXBedProbePoints[p3] - baryXBedProbePoints[p2];
+	float y3 = y - baryYBedProbePoints[p3];
+	float x13 = baryXBedProbePoints[p1] - baryXBedProbePoints[p3];
+	float y13 = baryYBedProbePoints[p1] - baryYBedProbePoints[p3];
+	float iDet = 1.0 / (y23 * x13 + x32 * y13);
+	l1 = (y23 * x3 + x32 * y3) * iDet;
+	l2 = (-y13 * x3 + x13 * y3) * iDet;
+	l3 = 1.0 - l1 - l2;
+}
+
+/*
+ * Interpolate on a triangular grid.  The triangle corners are indexed:
+ *
+ *   ^  [1]      [2]
+ *   |
+ *   Y      [4]
+ *   |
+ *   |  [0]      [3]
+ *      -----X---->
+ *
+ */
+float Move::TriangleZ(float x, float y) const
+{
+	float l1, l2, l3;
+	int8_t j;
+	for(int8_t i = 0; i < 4; i++)
+	{
+		j = (i + 1) % 4;
+		BarycentricCoordinates(i, j, 4, x, y, l1, l2, l3);
+		if(l1 > TRIANGLE_0 && l2 > TRIANGLE_0 && l3 > TRIANGLE_0)
+		{
+			return l1 * baryZBedProbePoints[i] + l2 * baryZBedProbePoints[j] + l3 * baryZBedProbePoints[4];
+		}
+	}
+	reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "Triangle interpolation: point outside all triangles!\n");
+	return 0.0;
+}
+
+void Move::SetProbedBedEquation(StringRef& reply)
+{
+	switch(NumberOfProbePoints())
+	{
+	case 3:
+		/*
+		 * Transform to a plane
+		 */
+
+		{
+			float x10 = xBedProbePoints[1] - xBedProbePoints[0];
+			float y10 = yBedProbePoints[1] - yBedProbePoints[0];
+			float z10 = zBedProbePoints[1] - zBedProbePoints[0];
+			float x20 = xBedProbePoints[2] - xBedProbePoints[0];
+			float y20 = yBedProbePoints[2] - yBedProbePoints[0];
+			float z20 = zBedProbePoints[2] - zBedProbePoints[0];
+			float a = y10 * z20 - z10 * y20;
+			float b = z10 * x20 - x10 * z20;
+			float c = x10 * y20 - y10 * x20;
+			float d = -(xBedProbePoints[1] * a + yBedProbePoints[1] * b + zBedProbePoints[1] * c);
+			aX = -a / c;
+			aY = -b / c;
+			aC = -d / c;
+			identityBedTransform = false;
+		}
+		break;
+
+	case 4:
+		/*
+		 * Transform to a ruled-surface quadratic.  The corner points for interpolation are indexed:
+		 *
+		 *   ^  [1]      [2]
+		 *   |
+		 *   Y
+		 *   |
+		 *   |  [0]      [3]
+		 *      -----X---->
+		 *
+		 *   These are the scaling factors to apply to x and y coordinates to get them into the
+		 *   unit interval [0, 1].
+		 */
+		xRectangle = 1.0 / (xBedProbePoints[3] - xBedProbePoints[0]);
+		yRectangle = 1.0 / (yBedProbePoints[1] - yBedProbePoints[0]);
+		identityBedTransform = false;
+		break;
+
+	case 5:
+		for(int8_t i = 0; i < 4; i++)
+		{
+			float x10 = xBedProbePoints[i] - xBedProbePoints[4];
+			float y10 = yBedProbePoints[i] - yBedProbePoints[4];
+			float z10 = zBedProbePoints[i] - zBedProbePoints[4];
+			baryXBedProbePoints[i] = xBedProbePoints[4] + 2.0 * x10;
+			baryYBedProbePoints[i] = yBedProbePoints[4] + 2.0 * y10;
+			baryZBedProbePoints[i] = zBedProbePoints[4] + 2.0 * z10;
+		}
+		baryXBedProbePoints[4] = xBedProbePoints[4];
+		baryYBedProbePoints[4] = yBedProbePoints[4];
+		baryZBedProbePoints[4] = zBedProbePoints[4];
+		identityBedTransform = false;
+		break;
+
+	default:
+		reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "Attempt to set bed compensation before all probe points have been recorded.");
+	}
+
+	reply.copy("Bed equation fits points");
+	for(int8_t point = 0; point < NumberOfProbePoints(); point++)
+	{
+		reply.catf(" [%.1f, %.1f, %.3f]", xBedProbePoints[point], yBedProbePoints[point], zBedProbePoints[point]);
 	}
 }
 
@@ -416,6 +545,194 @@ void Move::SetDeltaEndstopAdjustments(float x, float y, float z)
 	deltaEndstopAdjustments[X_AXIS] = x;
 	deltaEndstopAdjustments[Y_AXIS] = y;
 	deltaEndstopAdjustments[Z_AXIS] = z;
+}
+
+// This is the function that's called by the timer interrupt to step the motors.
+void Move::Interrupt()
+{
+  // Have we got a live DDA?
+
+	if (currentDda != nullptr)
+	{
+		currentDda->Step();
+	}
+}
+
+void Move::StartNextMove(uint32_t startTime)
+{
+	if (currentDda != nullptr)
+	{
+		currentDda->Release();
+		ddaRingGetPointer = ddaRingGetPointer->GetNext();
+	}
+	if (!DDARingEmpty())
+	{
+		currentDda = ddaRingGetPointer;
+		currentDda->Start(startTime);
+	}
+}
+
+// This is called from the step ISR. Any variables it modifies that are also read by code outside the ISR must be declared 'volatile'.
+void Move::HitLowStop(int8_t drive, DDA* hitDDA)
+{
+	hitDDA->MoveAborted();
+	float hitPoint = reprap.GetPlatform()->AxisMinimum(drive);
+	if(drive == Z_AXIS)
+	{
+		if(zProbing)
+		{
+			// Executing G32, so record the Z position at which we hit the end stop
+			if (reprap.GetGCodes()->GetAxisIsHomed(drive))
+			{
+				// Z-axis has already been homed, so just record the height of the bed at this point
+				lastZHit = hitDDA->MachineToEndPoint(drive) - reprap.GetPlatform()->ZProbeStopHeight();
+				return;
+			}
+			else
+			{
+				// Z axis has not yet been homed, so treat this probe as a homing command
+				lastZHit = 0.0;
+				hitPoint = reprap.GetPlatform()->ZProbeStopHeight();
+			}
+		}
+		else
+		{
+			// Executing G30, so set the current Z height to the value at which the end stop is triggered
+			// Transform it first so that the height is correct in user coordinates
+			float xyzPoint[DRIVES + 1];
+			LiveCoordinates(xyzPoint);
+			xyzPoint[Z_AXIS] = lastZHit = reprap.GetPlatform()->ZProbeStopHeight();
+			Transform(xyzPoint);
+			hitPoint = xyzPoint[Z_AXIS];
+		}
+	}
+	hitDDA->SetDriveCoordinate(hitPoint, drive);
+	reprap.GetGCodes()->SetAxisIsHomed(drive);
+}
+
+// This is called from the step ISR. Any variables it modifies that are also read by code outside the ISR must be declared 'volatile'.
+void Move::HitHighStop(int8_t drive, DDA* hitDDA)
+{
+	hitDDA->MoveAborted();
+	hitDDA->SetDriveCoordinate(reprap.GetPlatform()->AxisMaximum(drive), drive);
+	reprap.GetGCodes()->SetAxisIsHomed(drive);
+}
+
+// Return the untransformed machine coordinates
+void Move::GetCurrentMachinePosition(float m[]) const
+{
+	for(int8_t i = 0; i < DRIVES; i++)
+	{
+		if(i < AXES)
+		{
+			m[i] = nextMachineEndPoints[i];
+		}
+		else
+		{
+			m[i] = 0.0; //FIXME This resets extruders to 0.0, even the inactive ones (is this behaviour desired?)
+			//m[i] = lastMove->MachineToEndPoint(i); //FIXME TEST alternative that does not reset extruders to 0
+		}
+	}
+	m[DRIVES] = currentFeedrate;
+}
+
+// Return the transformed machine coordinates
+void Move::GetCurrentUserPosition(float m[]) const
+{
+	GetCurrentMachinePosition(m);
+	InverseTransform(m);
+}
+
+void Move::SetXBedProbePoint(int index, float x)
+{
+	if(index < 0 || index >= NUMBER_OF_PROBE_POINTS)
+	{
+		reprap.GetPlatform()->Message(BOTH_MESSAGE, "Z probe point  X index out of range.\n");
+		return;
+	}
+	xBedProbePoints[index] = x;
+	probePointSet[index] |= xSet;
+}
+
+void Move::SetYBedProbePoint(int index, float y)
+{
+	if(index < 0 || index >= NUMBER_OF_PROBE_POINTS)
+	{
+		reprap.GetPlatform()->Message(BOTH_MESSAGE, "Z probe point Y index out of range.\n");
+		return;
+	}
+	yBedProbePoints[index] = y;
+	probePointSet[index] |= ySet;
+}
+
+void Move::SetZBedProbePoint(int index, float z)
+{
+	if(index < 0 || index >= NUMBER_OF_PROBE_POINTS)
+	{
+		reprap.GetPlatform()->Message(BOTH_MESSAGE, "Z probe point Z index out of range.\n");
+		return;
+	}
+	zBedProbePoints[index] = z;
+	probePointSet[index] |= zSet;
+}
+
+float Move::XBedProbePoint(int index) const
+{
+	return xBedProbePoints[index];
+}
+
+float Move::YBedProbePoint(int index) const
+{
+	return yBedProbePoints[index];
+}
+
+float Move::ZBedProbePoint(int index) const
+{
+	return zBedProbePoints[index];
+}
+
+void Move::SetZProbing(bool probing)
+{
+	zProbing = probing;
+}
+
+float Move::GetLastProbedZ() const
+{
+	return lastZHit;
+}
+
+bool Move::AllProbeCoordinatesSet(int index) const
+{
+	return probePointSet[index] == (xSet | ySet | zSet);
+}
+
+bool Move::XYProbeCoordinatesSet(int index) const
+{
+	return (probePointSet[index]  & xSet) &&  (probePointSet[index]  & ySet);
+}
+
+int Move::NumberOfProbePoints() const
+{
+	for(int i = 0; i < NUMBER_OF_PROBE_POINTS; i++)
+	{
+		if(!AllProbeCoordinatesSet(i))
+		{
+			return i;
+		}
+	}
+	return NUMBER_OF_PROBE_POINTS;
+}
+
+int Move::NumberOfXYProbePoints() const
+{
+	for(int i = 0; i < NUMBER_OF_PROBE_POINTS; i++)
+	{
+		if(!XYProbeCoordinatesSet(i))
+		{
+			return i;
+		}
+	}
+	return NUMBER_OF_PROBE_POINTS;
 }
 
 // End

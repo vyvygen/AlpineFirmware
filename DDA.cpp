@@ -38,6 +38,8 @@ void DDA::Init(
 	totalDistance = distanceMoved;
 	requestedSpeed = reqSpeed;
 	acceleration = acc;
+	recipAccel = 1.0/acc;
+
 	const int32_t *positionNow = prev->MachineCoordinates();
 
 	for (size_t i = 0; i < DRIVES; ++i)
@@ -45,16 +47,16 @@ void DDA::Init(
 		DriveMovement& dm = ddm[i];
 		int32_t thisEndpoint = ep[i];
 		endPoint[i] = thisEndpoint;
-		dm.stepsDone = 0;
-		float dv = directionVector[i];
-		if (dv < 0.0001)
+		int32_t delta = (i < AXES) ? thisEndpoint - positionNow[i] : thisEndpoint;
+		dm.moving = (delta != 0);
+		if (dm.moving)
 		{
-			dm.InitNotMoving();
-		}
-		else
-		{
-			int32_t delta = (i < AXES) ? thisEndpoint - positionNow[i] : thisEndpoint;
-			dm.InitMoving(delta, dv, acceleration, reprap.GetPlatform()->DriveStepsPerUnit(i));
+			dm.nextStep = 0;
+			dm.totalSteps = labs(delta);
+			dm.direction = (delta < 0);
+			float dv = directionVector[i];
+			dm.mmPerStep = 1.0/(reprap.GetPlatform()->DriveStepsPerUnit(i) * dv);
+			dm.elasticComp = reprap.GetPlatform()->GetElasticComp(i) * dv;
 		}
 	}
 
@@ -121,15 +123,7 @@ void DDA::Init(
 	decelStartTime = accelStopTime + (totalDistance - accelDistance - decelDistance)/requestedSpeed;
 	totalTime = decelStartTime + sqrt((2.0 * decelDistance)/acceleration);
 
-	// Save the accelerate/decelerate distances for each drive
-	for (size_t i = 0; i < DRIVES; ++i)
-	{
-		DriveMovement& dm = ddm[i];
-		if (dm.moving)
-		{
-			dm.Prepare(directionVector[i], accelDistance, totalDistance - decelDistance, moveStartSpeed, moveTopSpeed);
-		}
-	}
+	state = ready;
 }
 
 float DDA::MachineToEndPoint(int8_t drive) const
@@ -142,9 +136,10 @@ float DDA::AdjustEndSpeed(float idealStartSpeed, const float *directionVector)
 	return 0.0;		//TODO implement this
 }
 
-void DDA::Start()
+void DDA::Start(uint32_t tim)
 {
-	reprap.GetMove()->currentDda = this;
+	moveStartTime = tim;
+	state = executing;
 	uint32_t firstInterruptTime = 0xFFFFFFFF;
 	for (size_t i = 0; i < DRIVES; ++i)
 	{
@@ -152,129 +147,129 @@ void DDA::Start()
 		if (dm.moving)
 		{
 			reprap.GetPlatform()->SetDirection(i, dm.direction);
-			uint32_t st = dm.CalcNextStepTime(accelStopTime, decelStartTime);
+			uint32_t st = CalcNextStepTime(dm);
 			if (st < firstInterruptTime)
 			{
 				firstInterruptTime = st;
 			}
 		}
 	}
-	ScheduleInterrupt(firstInterruptTime);
+	if (reprap.GetPlatform()->ScheduleInterrupt(firstInterruptTime + moveStartTime))
+	{
+		Step();
+	}
 }
 
 void DDA::Step()
 {
-	uint32_t now = ?;
-	uint32_t nextInterruptTime = 0xFFFFFFFF;
-	for (size_t drive = 0; drive < DRIVES; ++drive)
+	bool repeat;
+	do
 	{
-		DriveMovement& dm = ddm[drive];
-		if (dm.moving)
+		uint32_t now = reprap.GetPlatform()->GetInterruptClocks();
+		uint32_t nextInterruptTime = 0xFFFFFFFF;
+		for (size_t drive = 0; drive < DRIVES; ++drive)
 		{
-			uint32_t st0 = dm.nextStepTime;
-			if (now + minInterruptInterval >= st0)
+			DriveMovement& dm = ddm[drive];
+			if (dm.moving)
 			{
-				reprap.GetPlatform()->Step(drive);
-				if (++dm.stepsDone == dm.totalSteps)
+				uint32_t st0 = dm.nextStepTime;
+				if (now + minInterruptInterval >= st0)
 				{
-					dm.moving = false;
-				}
-				else
-				{
-					uint32_t st1 = dm.CalcNextStepTime(accelStopTime, decelStartTime);
+					if (st0 > moveCompletedTime)
+					{
+						moveCompletedTime = st0;			// save in case the move has finished
+					}
+					reprap.GetPlatform()->Step(drive);
+					uint32_t st1 = CalcNextStepTime(dm);
 					if (st1 < nextInterruptTime)
 					{
 						nextInterruptTime = st1;
 					}
 				}
+				else if (st0 < nextInterruptTime)
+				{
+					nextInterruptTime = st0;
+				}
 			}
-			else if (st0 < nextInterruptTime)
+
+			// Hit anything?
+			if ((endStopsToCheck & (1 << drive)) != 0)
 			{
-				nextInterruptTime = st0;
+				switch(reprap.GetPlatform()->Stopped(drive))
+				{
+				case lowHit:
+					reprap.GetMove()->HitLowStop(drive, this);
+					moveCompletedTime = reprap.GetPlatform()->GetInterruptClocks() + settleClocks;
+					MoveComplete();
+					break;
+				case highHit:
+					reprap.GetMove()->HitHighStop(drive, this);
+					moveCompletedTime = reprap.GetPlatform()->GetInterruptClocks() + settleClocks;
+					MoveComplete();
+					break;
+				case lowNear:
+					//TODO implement this
+//					velocity = instantDv;		// slow down because we are getting close
+					break;
+				default:
+					break;
+				}
 			}
 		}
 
-	    // Hit anything?
-	    if ((endStopsToCheck & (1 << drive)) != 0)
-	    {
-	    	switch(reprap.GetPlatform()->Stopped(drive))
-	    	{
-	    	case lowHit:
-	    		reprap.GetMove()->HitLowStop(drive, this);
-	    		MoveComplete();
-	    		break;
-			case highHit:
-				reprap.GetMove()->HitHighStop(drive, this);
-				MoveComplete();
-				break;
-			case lowNear:
-				//TODO implement this
-//				velocity = instantDv;		// slow down because we are getting close
-				break;
-			default:
-				break;
-	    	}
-	    }
-	}
-
-	if (nextInterruptTime == 0xFFFFFFFF)
-	{
-		MoveComplete();					// we have just done the last steps for this move.
-	}
-	else
-	{
-		ScheduleInterrupt(nextInterruptTime);
-	}
+		if (nextInterruptTime == 0xFFFFFFFF)
+		{
+			MoveComplete();					// we have just done the last steps for this move.
+			break;
+		}
+		repeat = reprap.GetPlatform()->ScheduleInterrupt(nextInterruptTime);
+	} while (repeat);
 }
 
 // This is called when the move is finished or an endstop has been hit
 void DDA::MoveComplete()
 {
 	// Schedule the next move immediately - we put the spaces between moves at the start of moves, not the end
-	reprap.GetMove()->StartNextMove();
+	reprap.GetMove()->StartNextMove(moveCompletedTime);
 }
 
-void DriveMovement::InitNotMoving()
+uint32_t DDA::CalcNextStepTime(DriveMovement& dm)
 {
-	moving = false;
-}
-
-void DriveMovement::InitMoving(int32_t delta, float dv, float acc, float driveStepsPerMm)
-{
-	direction = (delta < 0);
-	moving = true;
-	accel = acc * dv;
-	recipAccel = 1.0/accel;
-	mmPerStep = 1.0/driveStepsPerMm;
-}
-
-void DriveMovement::Prepare(float dv, float accelDist, float startDecelDist, float moveStartSpeed, float moveTopSpeed)
-{
-	accelStopDistance = accelDist * dv;
-	decelStartDistance = startDecelDist * dv;
-	startSpeed = moveStartSpeed * dv;
-	topSpeed = moveTopSpeed * dv;
-}
-
-uint32_t DriveMovement::CalcNextStepTime(float accelStopTime, float decelStartTime)
-{
-	float distanceMoved = mmPerStep * (float)(stepsDone + 1);
-	if (distanceMoved < accelStopDistance)	//TODO calc this in steps instead
+	++dm.nextStep;
+	if (dm.nextStep > dm.totalSteps)
 	{
-		nextStepTime = (sqrt((startSpeed * startSpeed) + accel * distanceMoved) - startSpeed) * recipAccel;
+		dm.moving = false;
+		return 0xFFFFFFFF;
+	}
+	float distanceMoved = dm.mmPerStep * (float)(dm.nextStep);		// we could accumulate this instead of multiplying, but we might then get unacceptable rounding errors
+	float tempStepTime;
+	if (distanceMoved < accelStopDistance)	//TODO calc this in steps instead?
+	{
+		tempStepTime = (sqrt((startSpeed * startSpeed) + acceleration * distanceMoved) - startSpeed) * recipAccel;
 	}
 	else if (distanceMoved < decelStartDistance)
 	{
-		nextStepTime = (distanceMoved - decelStartDistance)/topSpeed + accelStopTime;
+		tempStepTime = (distanceMoved - decelStartDistance)/topSpeed + accelStopTime;
 	}
 	else
 	{
-		nextStepTime = (topSpeed - sqrt((topSpeed * topSpeed) - (distanceMoved - decelStartDistance))) * recipAccel + decelStartTime;
+		tempStepTime = (topSpeed - sqrt((topSpeed * topSpeed) - (distanceMoved - accelStopDistance))) * recipAccel + decelStartTime;
 	}
 	//TODO include Bowden elasticity compensation and delta support
-	return nextStepTime;
+	tempStepTime += moveStartTime;
+	dm.nextStepTime = (uint32_t)(tempStepTime * stepClockRate) + moveStartTime;
+	return dm.nextStepTime;
+}
+
+void DDA::MoveAborted()
+{
+//TODO implement
+}
+
+// Force an end point
+void DDA::SetDriveCoordinate(float a, int8_t drive)
+{
+	//TODO
 }
 
 // End
-
-
