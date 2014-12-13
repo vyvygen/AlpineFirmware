@@ -44,16 +44,16 @@ void DDA::Init(
 
 	for (size_t i = 0; i < DRIVES; ++i)
 	{
-		DriveMovement& dm = ddm[i];
 		int32_t thisEndpoint = ep[i];
 		endPoint[i] = thisEndpoint;
 		int32_t delta = (i < AXES) ? thisEndpoint - positionNow[i] : thisEndpoint;
+		DriveMovement& dm = ddm[i];
 		dm.moving = (delta != 0);
 		if (dm.moving)
 		{
 			dm.nextStep = 0;
 			dm.totalSteps = labs(delta);
-			dm.direction = (delta < 0);
+			dm.direction = (delta >= 0);
 			float dv = directionVector[i];
 			dm.mmPerStep = 1.0/(reprap.GetPlatform()->DriveStepsPerUnit(i) * dv);
 			dm.elasticComp = reprap.GetPlatform()->GetElasticComp(i) * dv;
@@ -63,24 +63,24 @@ void DDA::Init(
 	startPinned = false;
 
 	// 2. Calculate the accelerate and decelerate distances and the top speed
-	float accelDistance, decelDistance, moveStartSpeed, moveTopSpeed;
+	float decelDistance;
 	if (limitDda == nullptr)
 	{
 		// There is no previous move, so this move must start at zero speed, and for now it must also end at zero speed.
 		// Calculate the distance required to accelerate to the requested speed: v^2 = u^2 + 2as
-		moveStartSpeed = 0.0;
+		startSpeed = 0.0;
 		float distanceToReqSpeed = (reqSpeed * reqSpeed)/(2.0 * acceleration);
 		if (distanceToReqSpeed * 2 >= totalDistance)
 		{
 			// we can't reach the requested speed, so just accelerate and decelerate
-			accelDistance = decelDistance = 0.5 * totalDistance;
-			moveTopSpeed = sqrt((2.0 * accelDistance)/acceleration);
+			accelStopDistance = decelDistance = 0.5 * totalDistance;
+			topSpeed = sqrt((2.0 * accelStopDistance)/acceleration);
 			//moveType = accelDecel;
 		}
 		else
 		{
-			accelDistance = decelDistance = distanceToReqSpeed;
-			moveTopSpeed = requestedSpeed;
+			accelStopDistance = decelDistance = distanceToReqSpeed;
+			topSpeed = requestedSpeed;
 		}
 		startPinned = true;			// can't adjust the starting speed of this move
 	}
@@ -93,40 +93,41 @@ void DDA::Init(
 		float idealStartSpeed = min<float>(maxStartSpeed, requestedSpeed);
 
 		// Try to meld this move to the previous move to avoid stop/start
-		float moveStartSpeed = prev->AdjustEndSpeed(idealStartSpeed, directionVector);
-		if (moveStartSpeed < idealStartSpeed || moveStartSpeed == requestedSpeed)
+		startSpeed = prev->AdjustEndSpeed(idealStartSpeed, directionVector);
+		if (startSpeed < idealStartSpeed || startSpeed == requestedSpeed)
 		{
 			startPinned = true;
 		}
 
-		accelDistance = ((requestedSpeed * requestedSpeed) - (moveStartSpeed * moveStartSpeed))/(2.0 * acceleration);
-		decelDistance = (requestedSpeed * requestedSpeed)/(2.0 * acceleration);
-		if (accelDistance + decelDistance >= totalDistance)
+		accelStopDistance = ((requestedSpeed * requestedSpeed) - (startSpeed * startSpeed))/(2.0 * acceleration);
+		decelDistance = (requestedSpeed * requestedSpeed)/(2.0 * acceleration);		// end speed is zero
+		if (accelStopDistance + decelDistance >= totalDistance)
 		{
 			// It's an accelerate-decelerate move. If V is the peak speed, then (V^2 - u^2)/2a + (V^2 - 0)/2a = distance.
 			// So (2V^2 - u^2)/2a = distance
 			// So V^2 = a * distance - 0.5u^2
-			float vsquared = (acceleration * totalDistance) - 0.5 * moveStartSpeed * moveStartSpeed;
+			float vsquared = (acceleration * totalDistance) - 0.5 * startSpeed * startSpeed;
 			// Calculate accelerate distance from: V^2 = u^2 + 2as
-			accelDistance = (vsquared - (moveStartSpeed * moveStartSpeed))/(2.0 * acceleration);
-			decelDistance = totalDistance - accelDistance;
-			moveTopSpeed = sqrt(vsquared);
+			accelStopDistance = (vsquared - (startSpeed * startSpeed))/(2.0 * acceleration);
+			decelDistance = totalDistance - accelStopDistance;
+			topSpeed = sqrt(vsquared);
 		}
 		else
 		{
-			moveTopSpeed = requestedSpeed;
+			topSpeed = requestedSpeed;
 		}
 	}
 
 	// Now convert the accelerate/decelerate distances to times
-	accelStopTime = sqrt((2.0 * accelDistance)/acceleration);
-	decelStartTime = accelStopTime + (totalDistance - accelDistance - decelDistance)/requestedSpeed;
+	decelStartDistance = totalDistance - decelDistance;
+	accelStopTime = sqrt((2.0 * accelStopDistance)/acceleration);
+	decelStartTime = accelStopTime + (decelStartDistance - accelStopDistance)/topSpeed;
 	totalTime = decelStartTime + sqrt((2.0 * decelDistance)/acceleration);
 
 	state = ready;
 }
 
-float DDA::MachineToEndPoint(int8_t drive) const
+float DDA::MachineToEndPoint(size_t drive) const
 {
 	return ((float)(endPoint[drive]))/reprap.GetPlatform()->DriveStepsPerUnit(drive);
 }
@@ -136,9 +137,11 @@ float DDA::AdjustEndSpeed(float idealStartSpeed, const float *directionVector)
 	return 0.0;		//TODO implement this
 }
 
-void DDA::Start(uint32_t tim)
+// Start executing the move, returning true if Step() needs to be called immediately.
+bool DDA::Start(uint32_t tim)
 {
 	moveStartTime = tim;
+	moveCompletedTime = 0;
 	state = executing;
 	uint32_t firstInterruptTime = 0xFFFFFFFF;
 	for (size_t i = 0; i < DRIVES; ++i)
@@ -154,18 +157,32 @@ void DDA::Start(uint32_t tim)
 			}
 		}
 	}
-	if (reprap.GetPlatform()->ScheduleInterrupt(firstInterruptTime + moveStartTime))
+	debugPrintf("DDA: startc=%u irqc=%u d=%f a=%f 1/a=%f reqv=%f topv=%f startv=%f tstopa=%f tstartd=%f dstopa=%f dstartd=%f, ttotal=%f\n",
+					moveStartTime, firstInterruptTime, totalDistance, acceleration, recipAccel, requestedSpeed,
+					topSpeed, startSpeed, accelStopTime, decelStartTime, accelStopDistance, decelStartDistance, totalTime);
+	if (firstInterruptTime == 0xFFFFFFFF)
 	{
-		Step();
+		// No steps are pending. This should not happen!
+		state = completed;
+		return false;
+	}
+	else
+	{
+		return reprap.GetPlatform()->ScheduleInterrupt(firstInterruptTime + moveStartTime);
 	}
 }
 
-void DDA::Step()
+bool DDA::Step()
 {
+	if (state != executing)
+	{
+		return false;
+	}
+
 	bool repeat;
 	do
 	{
-		uint32_t now = reprap.GetPlatform()->GetInterruptClocks();
+		uint32_t now = reprap.GetPlatform()->GetInterruptClocks() - moveStartTime;
 		uint32_t nextInterruptTime = 0xFFFFFFFF;
 		for (size_t drive = 0; drive < DRIVES; ++drive)
 		{
@@ -199,13 +216,13 @@ void DDA::Step()
 				{
 				case lowHit:
 					reprap.GetMove()->HitLowStop(drive, this);
-					moveCompletedTime = reprap.GetPlatform()->GetInterruptClocks() + settleClocks;
-					MoveComplete();
+					moveCompletedTime = now + settleClocks;
+					state = completed;
 					break;
 				case highHit:
 					reprap.GetMove()->HitHighStop(drive, this);
-					moveCompletedTime = reprap.GetPlatform()->GetInterruptClocks() + settleClocks;
-					MoveComplete();
+					moveCompletedTime = now + settleClocks;
+					state = completed;
 					break;
 				case lowNear:
 					//TODO implement this
@@ -219,18 +236,16 @@ void DDA::Step()
 
 		if (nextInterruptTime == 0xFFFFFFFF)
 		{
-			MoveComplete();					// we have just done the last steps for this move.
-			break;
+			state = completed;
 		}
-		repeat = reprap.GetPlatform()->ScheduleInterrupt(nextInterruptTime);
+		if (state == completed)
+		{
+			// Schedule the next move immediately - we put the spaces between moves at the start of moves, not the end
+			return reprap.GetMove()->StartNextMove(moveStartTime + moveCompletedTime);
+		}
+		repeat = reprap.GetPlatform()->ScheduleInterrupt(nextInterruptTime + moveStartTime);
 	} while (repeat);
-}
-
-// This is called when the move is finished or an endstop has been hit
-void DDA::MoveComplete()
-{
-	// Schedule the next move immediately - we put the spaces between moves at the start of moves, not the end
-	reprap.GetMove()->StartNextMove(moveCompletedTime);
+	return false;
 }
 
 uint32_t DDA::CalcNextStepTime(DriveMovement& dm)
@@ -243,21 +258,20 @@ uint32_t DDA::CalcNextStepTime(DriveMovement& dm)
 	}
 	float distanceMoved = dm.mmPerStep * (float)(dm.nextStep);		// we could accumulate this instead of multiplying, but we might then get unacceptable rounding errors
 	float tempStepTime;
-	if (distanceMoved < accelStopDistance)	//TODO calc this in steps instead?
+	if (distanceMoved < accelStopDistance)
 	{
-		tempStepTime = (sqrt((startSpeed * startSpeed) + acceleration * distanceMoved) - startSpeed) * recipAccel;
+		tempStepTime = (sqrt((startSpeed * startSpeed) + (acceleration * distanceMoved * 2.0)) - startSpeed) * recipAccel;
 	}
 	else if (distanceMoved < decelStartDistance)
 	{
-		tempStepTime = (distanceMoved - decelStartDistance)/topSpeed + accelStopTime;
+		tempStepTime = (distanceMoved - accelStopDistance)/topSpeed + accelStopTime;
 	}
 	else
 	{
-		tempStepTime = (topSpeed - sqrt((topSpeed * topSpeed) - (distanceMoved - accelStopDistance))) * recipAccel + decelStartTime;
+		tempStepTime = (topSpeed - sqrt((topSpeed * topSpeed) - ((distanceMoved - decelStartDistance) * acceleration * 2.0))) * recipAccel + decelStartTime;
 	}
 	//TODO include Bowden elasticity compensation and delta support
-	tempStepTime += moveStartTime;
-	dm.nextStepTime = (uint32_t)(tempStepTime * stepClockRate) + moveStartTime;
+	dm.nextStepTime = (uint32_t)(tempStepTime * (float)stepClockRate);
 	return dm.nextStepTime;
 }
 
@@ -267,9 +281,14 @@ void DDA::MoveAborted()
 }
 
 // Force an end point
-void DDA::SetDriveCoordinate(float a, int8_t drive)
+void DDA::SetDriveCoordinate(int32_t a, size_t drive)
 {
-	//TODO
+	endPoint[drive] = a;
+}
+
+/*static*/ int32_t DDA::EndPointToMachine(size_t drive, float coord)
+{
+	return (int32_t)roundf(coord * reprap.GetPlatform()->DriveStepsPerUnit(drive));
 }
 
 // End

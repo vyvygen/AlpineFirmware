@@ -12,17 +12,16 @@ Move::Move(Platform* p, GCodes* g) : currentDda(NULL)
 	active = false;
 
 	// Build the DDA ring
-	ddaRingAddPointer = new DDA(NULL);
-	DDA *dda = ddaRingAddPointer;
-	DDA *oldDda;
+	DDA *dda = new DDA(NULL);
+	ddaRingGetPointer = ddaRingAddPointer = dda;
 	for(unsigned int i = 1; i < DdaRingLength; i++)
 	{
-		oldDda = dda;
+		DDA *oldDda = dda;
 		dda = new DDA(dda);
 		oldDda->SetPrevious(dda);
 	}
 	ddaRingAddPointer->SetNext(dda);
-	dda->SetPrevious(oldDda);
+	dda->SetPrevious(ddaRingAddPointer);
 }
 
 void Move::Init()
@@ -36,11 +35,17 @@ void Move::Init()
 		reprap.GetPlatform()->SetDirection(i, FORWARDS);
 	}
 
-	// Empty the ring (TODO: set all status to empty)
+	// Empty the ring
 	ddaRingGetPointer = ddaRingAddPointer;
+	DDA *dda = ddaRingAddPointer;
+	do
+	{
+		dda->Init();
+		dda = dda->GetNext();
+	} while (dda != ddaRingAddPointer);
+
 	currentDda = nullptr;
 
-//	ddaRingLocked = false;
 	addNoMoreMoves = false;
 
 	int8_t slow = reprap.GetPlatform()->SlowestDrive();
@@ -54,7 +59,7 @@ void Move::Init()
 	lastZHit = 0.0;
 	zProbing = false;
 
-	for(uint8_t point = 0; point < NUMBER_OF_PROBE_POINTS; point++)
+	for(size_t point = 0; point < NUMBER_OF_PROBE_POINTS; point++)
 	{
 		xBedProbePoints[point] = (0.3 + 0.6*(float)(point%2))*reprap.GetPlatform()->AxisMaximum(X_AXIS);
 		yBedProbePoints[point] = (0.0 + 0.9*(float)(point/2))*reprap.GetPlatform()->AxisMaximum(Y_AXIS);
@@ -105,31 +110,22 @@ void Move::Spin()
     float normalisedDirectionVector[DRIVES];	// Used to hold a unit-length vector in the direction of motion
 	if (reprap.GetGCodes()->ReadMove(nextMove, endStopsToCheck))
 	{
+		currentFeedrate = nextMove[DRIVES];		// might be G1 with just an F field
 		Transform(nextMove);
-		nextMachineEndPoints[DRIVES] = nextMove[DRIVES];		// might be G1 with just an F field
 
 		bool noMove = true;
 		DDA *newDda = ddaRingAddPointer;
-		DDA *prevDda = newDda->GetPrevious();
+		const int32_t *positionNow = newDda->GetPrevious()->MachineCoordinates();
 		for (size_t drive = 0; drive < DRIVES; drive++)
 		{
-			nextMachineEndPoints[drive] = EndPointToMachine(drive, nextMove[drive]);
-			if (drive < AXES)
+			int32_t ep = EndPointToMachine(drive, nextMove[drive]);
+			nextMachineEndPoints[drive] = ep;
+			int32_t delta = (drive < AXES) ? ep - positionNow[drive] : ep;
+			if (delta != 0)
 			{
-				if (nextMachineEndPoints[drive] - prevDda->MachineCoordinates()[drive] != 0)
-				{
-					noMove = false;
-				}
-				normalisedDirectionVector[drive] = nextMove[drive] - prevDda->MachineToEndPoint(drive);
+				noMove = false;
 			}
-			else
-			{
-				if (nextMachineEndPoints[drive] != 0)
-				{
-					noMove = false;
-				}
-				normalisedDirectionVector[drive] = nextMove[drive];
-			}
+			normalisedDirectionVector[drive] = (float)delta/reprap.GetPlatform()->DriveStepsPerUnit(drive);
 		}
 
 		// Throw it away if there's no real movement.
@@ -147,9 +143,9 @@ void Move::Spin()
 		float acceleration = VectorBoxIntersection(normalisedDirectionVector, reprap.GetPlatform()->Accelerations(), DRIVES);
 
 		// Set the speed to the smaller of the requested and maximum speed.
-		// Note: this assumes that the requested feedrate is the Cartesian diagonal of all the drive moves (as in the RRP 0.79 release).
+		// Note: this assumes that the requested feedrate is the Cartesian diagonal of all the drive moves (as in the RRP 0.78 release).
 		// This will cause the actual feedrate to be slightly lower than requested if an XYZ move includes extrusion, however the effect is only a few percent.
-		float speed = min<float>(nextMove[DRIVES], VectorBoxIntersection(normalisedDirectionVector, reprap.GetPlatform()->MaxFeedrates(), DRIVES));
+		float speed = min<float>(currentFeedrate, VectorBoxIntersection(normalisedDirectionVector, reprap.GetPlatform()->MaxFeedrates(), DRIVES));
 
 		// See which already-prepared moves we can adjust. The ISR could change the DDAs while we are doing this, so we disable interrupts for a short while.
 		cpu_irq_disable();
@@ -176,11 +172,17 @@ void Move::Spin()
 		}
 
 		newDda->Init(nextMachineEndPoints, distanceMoved, speed, acceleration, normalisedDirectionVector, endStopsToCheck, limitDda);
+		ddaRingAddPointer = newDda->GetNext();
 	}
 
 	if (currentDda == nullptr)
 	{
-		StartNextMove(reprap.GetPlatform()->GetInterruptClocks());		// start the next move if none is executing already
+		if (StartNextMove(Platform::GetInterruptClocks()))		// start the next move if none is executing already
+		{
+			cpu_irq_disable();
+			Interrupt();
+			cpu_irq_enable();
+		}
 	}
 	reprap.GetPlatform()->ClassReport("Move", longWait);
 }
@@ -262,11 +264,12 @@ void Move::SetPositions(float move[])
 	if (DDARingEmpty())
 	{
 		DDA *lastMove = ddaRingAddPointer->GetPrevious();
-		for(uint8_t drive = 0; drive < DRIVES; drive++)
+		for (size_t drive = 0; drive < DRIVES; drive++)
 		{
-			lastMove->SetDriveCoordinate(move[drive], drive);
+			float coord = DDA::EndPointToMachine(drive, move[drive]);
+			lastMove->SetDriveCoordinate(coord, drive);
+			nextMachineEndPoints[drive] = coord;
 		}
-		lastMove->SetFeedRate(move[DRIVES]);
 	}
 	else
 	{
@@ -279,6 +282,7 @@ void Move::SetFeedrate(float feedRate)
 	if (DDARingEmpty())
 	{
 		DDA *lastMove = ddaRingAddPointer->GetPrevious();
+		currentFeedrate = feedRate;
 		lastMove->SetFeedRate(feedRate);
 	}
 	else
@@ -550,25 +554,34 @@ void Move::SetDeltaEndstopAdjustments(float x, float y, float z)
 // This is the function that's called by the timer interrupt to step the motors.
 void Move::Interrupt()
 {
-  // Have we got a live DDA?
-
-	if (currentDda != nullptr)
+	bool again = true;
+	while (again && currentDda != nullptr)
 	{
-		currentDda->Step();
+		again = currentDda->Step();
 	}
 }
 
-void Move::StartNextMove(uint32_t startTime)
+bool Move::StartNextMove(uint32_t startTime)
 {
 	if (currentDda != nullptr)
 	{
+		for (size_t i = 0; i < DRIVES; ++i)
+		{
+			liveCoordinates[i] = currentDda->MachineToEndPoint(i);
+		}
 		currentDda->Release();
+		currentDda = nullptr;
 		ddaRingGetPointer = ddaRingGetPointer->GetNext();
 	}
+
 	if (!DDARingEmpty())
 	{
 		currentDda = ddaRingGetPointer;
-		currentDda->Start(startTime);
+		return currentDda->Start(startTime);
+	}
+	else
+	{
+		return false;
 	}
 }
 
@@ -606,7 +619,9 @@ void Move::HitLowStop(int8_t drive, DDA* hitDDA)
 			hitPoint = xyzPoint[Z_AXIS];
 		}
 	}
-	hitDDA->SetDriveCoordinate(hitPoint, drive);
+	int32_t coord = EndPointToMachine(drive, hitPoint);
+	hitDDA->SetDriveCoordinate(coord, drive);
+	nextMachineEndPoints[drive] = coord;
 	reprap.GetGCodes()->SetAxisIsHomed(drive);
 }
 
@@ -614,18 +629,20 @@ void Move::HitLowStop(int8_t drive, DDA* hitDDA)
 void Move::HitHighStop(int8_t drive, DDA* hitDDA)
 {
 	hitDDA->MoveAborted();
-	hitDDA->SetDriveCoordinate(reprap.GetPlatform()->AxisMaximum(drive), drive);
+	int32_t coord = EndPointToMachine(drive, reprap.GetPlatform()->AxisMaximum(drive));
+	hitDDA->SetDriveCoordinate(coord, drive);
+	nextMachineEndPoints[drive] = coord;
 	reprap.GetGCodes()->SetAxisIsHomed(drive);
 }
 
 // Return the untransformed machine coordinates
 void Move::GetCurrentMachinePosition(float m[]) const
 {
-	for(int8_t i = 0; i < DRIVES; i++)
+	for (size_t i = 0; i < DRIVES; i++)
 	{
-		if(i < AXES)
+		if (i < AXES)
 		{
-			m[i] = nextMachineEndPoints[i];
+			m[i] = ((float)nextMachineEndPoints[i])/reprap.GetPlatform()->DriveStepsPerUnit(i);
 		}
 		else
 		{

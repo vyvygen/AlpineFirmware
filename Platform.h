@@ -561,9 +561,9 @@ public:
 
   // Timing
   
-  float Time();								// Returns elapsed seconds since some arbitrary time
-  uint32_t GetInterruptClocks() const;		// Get the interrupt clock count
-  bool ScheduleInterrupt(uint32_t tim);		// Schedule an interrupt at the specified clock count, or return true if it has passed already
+  float Time();									// Returns elapsed seconds since some arbitrary time
+  static uint32_t GetInterruptClocks();			// Get the interrupt clock count
+  static bool ScheduleInterrupt(uint32_t tim);	// Schedule an interrupt at the specified clock count, or return true if it has passed already
   void Tick();
   
   // Communications and data storage
@@ -1165,7 +1165,7 @@ inline float Platform::GetElasticComp(size_t drive) const
 }
 
 // Get the interrupt clock count
-inline uint32_t Platform::GetInterruptClocks() const
+/*static*/ inline uint32_t Platform::GetInterruptClocks()
 {
 	return TC_ReadCV(TC1, 0);
 }

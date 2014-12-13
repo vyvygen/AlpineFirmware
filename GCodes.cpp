@@ -643,16 +643,18 @@ bool GCodes::DoCannedCycleMove(EndstopChecks ce)
 bool GCodes::SetPositions(GCodeBuffer *gb)
 {
 	if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
+	{
 		return false;
+	}
 
-	if(LoadMoveBufferFromGCode(gb, true, false))
+	if (LoadMoveBufferFromGCode(gb, true, false))
 	{
 		// Transform the position so that e.g. if the user does G92 Z0,
 		// the position we report (which gets inverse-transformed) really is Z=0 afterwards
 		reprap.GetMove()->Transform(moveBuffer);
 		reprap.GetMove()->SetLiveCoordinates(moveBuffer);
 		reprap.GetMove()->SetPositions(moveBuffer);
-		reprap.GetMove()->SetFeedrate(platform->InstantDv(platform->SlowestDrive()));  // On a G92 we must effectively be stationary
+//		reprap.GetMove()->SetFeedrate(platform->InstantDv(platform->SlowestDrive()));  // On a G92 we must effectively be stationary
 	}
 
 	return true;

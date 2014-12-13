@@ -77,7 +77,7 @@ public:
     void SetDeltaParameters(float diagonal, float radius);
     const float *GetDeltaEndstopAdjustments() const;
     void SetDeltaEndstopAdjustments(float x, float y, float z);
-    void StartNextMove(uint32_t startTime);
+    bool StartNextMove(uint32_t startTime);				// start the next move, returning true if Step() needs to be called immediately
 
 private:
 
@@ -94,8 +94,6 @@ private:
     DDA* DDARingGet();									// Get the next DDA ring entry to be run
     bool DDARingEmpty() const;							// Anything there?
     bool NoLiveMovement() const;						// Is a move running, or are there any queued?
-    bool GetDDARingLock();								// Lock the ring so only this function may access it
-    void ReleaseDDARingLock();							// Release the DDA ring lock
 
     static int32_t EndPointToMachine(int8_t drive, float coord);
 
@@ -104,7 +102,6 @@ private:
     DDA* volatile currentDda;
     DDA* ddaRingAddPointer;
     DDA* volatile ddaRingGetPointer;
-    volatile bool ddaRingLocked;
 
     float lastTime;									// The last time we were called (secs)
     bool addNoMoreMoves;							// If true, allow no more moves to be added to the look-ahead
@@ -137,13 +134,6 @@ private:
 
 //******************************************************************************************************
 
-//inline bool DDA::Active() const
-//{
-//  return active;
-//}
-
-//***************************************************************************************
-
 inline bool Move::DDARingEmpty() const
 {
 	return ddaRingGetPointer == ddaRingAddPointer;
@@ -152,21 +142,6 @@ inline bool Move::DDARingEmpty() const
 inline bool Move::NoLiveMovement() const
 {
 	return currentDda == nullptr && DDARingEmpty();
-}
-
-inline bool Move::GetDDARingLock()
-{
-	if(ddaRingLocked)
-	{
-		return false;
-	}
-	ddaRingLocked = true;
-	return true;
-}
-
-inline void Move::ReleaseDDARingLock()
-{
-	ddaRingLocked = false;
 }
 
 inline void Move::LiveCoordinates(float m[]) const

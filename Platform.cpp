@@ -35,6 +35,16 @@ const uint32_t fanMaxInterruptCount = 32;			// number of fan interrupts that we 
 static volatile uint32_t fanLastResetTime = 0;		// time (microseconds) at which we last reset the interrupt count, accessed inside and outside ISR
 static volatile uint32_t fanInterval = 0;			// written by ISR, read outside the ISR
 
+//#define MOVE_DEBUG
+
+#ifdef MOVE_DEBUG
+unsigned int numInterruptsScheduled = 0;
+unsigned int numInterruptsExecuted = 0;
+uint32_t nextInterruptTime = 0;
+uint32_t nextInterruptScheduledAt = 0;
+uint32_t lastInterruptTime = 0;
+#endif
+
 // Arduino initialise and loop functions
 // Put nothing in these other than calls to the RepRap equivalents
 
@@ -711,6 +721,10 @@ void Platform::SoftwareReset(uint16_t reason)
 void TC3_Handler()
 {
 	TC1->TC_CHANNEL[0].TC_IDR = TC_IER_CPAS;	// disable the interrupt
+#ifdef MOVE_DEBUG
+	++numInterruptsExecuted;
+	lastInterruptTime = Platform::GetInterruptClocks();
+#endif
 	reprap.Interrupt();
 }
 
@@ -738,7 +752,9 @@ void Platform::InitialiseInterrupts()
 	pmc_set_writeprotect(false);
 	pmc_enable_periph_clk((uint32_t) TC3_IRQn);
 	TC_Configure(TC1, 0, TC_CMR_WAVE | TC_CMR_WAVSEL_UP | TC_CMR_TCCLKS_TIMER_CLOCK1);
-	TC1 ->TC_CHANNEL[0].TC_IDR = ~(uint32_t)0;		// interrupts disabled for now
+	TC1 ->TC_CHANNEL[0].TC_IDR = ~(uint32_t)0;				// interrupts disabled for now
+	TC_Start(TC1, 0);
+	TC_GetStatus(TC1, 0);									// clear any pending interrupt
 	NVIC_EnableIRQ(TC3_IRQn);
 
 	// Timer interrupt to keep the networking timers running (called at 8Hz)
@@ -763,21 +779,26 @@ void Platform::InitialiseInterrupts()
 }
 
 // Schedule an interrupt at the specified clock count, or return true if that time is imminent or has passed already
-bool Platform::ScheduleInterrupt(uint32_t tim)
+/*static*/ bool Platform::ScheduleInterrupt(uint32_t tim)
 {
 	irqflags_t flags = cpu_irq_save();						// disable interrupts
 	TC_SetRA(TC1, 0, tim);									// set up the compare register
 	TC_GetStatus(TC1, 0);									// clear any pending interrupt
-	int32_t diff = (int32_t)(TC_ReadCV(TC1, 0) - tim);		// see how long we have to go
+	int32_t diff = (int32_t)(tim - TC_ReadCV(TC1, 0));		// see how long we have to go
 	bool ret;
-	if (diff < (VARIANT_MCK/2)/2000000)						// if less than 0.5us or already passed
+	if (diff < (int32_t)((VARIANT_MCK/2)/2000000))			// if less than 0.5us or already passed
 	{
 		ret = true;											// tell the caller to simulate an interrupt instead
 	}
 	else
 	{
 		ret = false;
-		TC1 ->TC_CHANNEL[1].TC_IER = TC_IER_CPAS;			// enable the interrupt
+		TC1 ->TC_CHANNEL[0].TC_IER = TC_IER_CPAS;			// enable the interrupt
+#ifdef MOVE_DEBUG
+		++numInterruptsScheduled;
+		nextInterruptTime = tim;
+		nextInterruptScheduledAt = Platform::GetInterruptClocks();
+#endif
 	}
 	cpu_irq_restore(flags);									// restore interrupt enable status
 	return ret;
@@ -955,6 +976,11 @@ void Platform::Diagnostics()
 	{
 		stats_display();
 	}
+#endif
+
+#ifdef MOVE_DEBUG
+	AppendMessage(BOTH_MESSAGE, "Interrupts scheduled %u, done %u, last %u, next %u sched at %u, now %u\n",
+			numInterruptsScheduled, numInterruptsExecuted, lastInterruptTime, nextInterruptTime, nextInterruptScheduledAt, GetInterruptClocks());
 #endif
 }
 

@@ -46,7 +46,8 @@ public:
 	{
 		empty,				// empty or being filled in
 		ready,				// ready, but could be subject to modifications
-		executing			// steps are currently being generated for this DDA
+		executing,			// steps are currently being generated for this DDA
+		completed			// move has been completed or aborted
 	};
 
 	DDA(DDA* n);
@@ -54,8 +55,8 @@ public:
 	void Init(int32_t ep[], float distanceMoved, float reqSpeed, float acc,	// Set up this move
 			const float *directionVector, EndstopChecks ce, const DDA *limitDda);
 	void Init();													// Set up initial positions for machine startup
-	void Start(uint32_t tim);										// Start executing the DDA, i.e. move the move.
-	void Step();													// Take one step of the DDA, called by timed interrupt.
+	bool Start(uint32_t tim);										// Start executing the DDA, i.e. move the move.
+	bool Step();													// Take one step of the DDA, called by timed interrupt.
 	void SetNext(DDA *n) { next = n; }
 	void SetPrevious(DDA *p) { prev = p; }
 	void Release() { state = empty; }
@@ -65,20 +66,20 @@ public:
 	DDA* GetPrevious() const { return prev; }
 	uint32_t GetTimeNeeded() const { return timeNeeded; }
 	uint32_t GetTimeLeft() const { return 0; }						//TODO implement this properly
-	float MachineToEndPoint(int8_t drive) const;					// Convert a move endpoint to real mm coordinates
+	float MachineToEndPoint(size_t drive) const;					// Convert a move endpoint to real mm coordinates
+	static int32_t EndPointToMachine(size_t drive, float coord);
 	const int32_t *MachineCoordinates() const { return endPoint; }	// Get endpoints of a move in machine coordinates
 	void MoveAborted();
-	void SetDriveCoordinate(float a, int8_t drive);					// Force an end point
+	void SetDriveCoordinate(int32_t a, size_t drive);				// Force an end point
 	void SetFeedRate(float rate) { requestedSpeed = rate; }
 
 private:
 	static const uint32_t stepClockRate = VARIANT_MCK/2;			// the frequency of the clock used for stepper pulse timing
-	static const uint32_t minInterruptInterval = stepClockRate/2000000u;		// 2us minimum interval between interrupts, in clocks
+	static const uint32_t minInterruptInterval = stepClockRate/500000u;		// 2us minimum interval between interrupts, in clocks
 	static const uint32_t settleClocks = stepClockRate/50;			// settling time after hitting an endstop (20ms)
 
 	float AdjustEndSpeed(float idealStartSpeed, const float *directionVector);	// adjust the end speed to match the following move
 	uint32_t CalcNextStepTime(DriveMovement& dm);
-	void MoveComplete();
 
 	DDA* next;								// The next one in the ring
 	DDA *prev;								// The previous one in the ring
