@@ -1,12 +1,12 @@
 /*
- * MoveNew.h
+ * Move.h
  *
  *  Created on: 7 Dec 2014
  *      Author: David
  */
 
-#ifndef MOVENEW_H_
-#define MOVENEW_H_
+#ifndef MOVE_H_
+#define MOVE_H_
 
 #include "DDA.h"
 

@@ -12,13 +12,26 @@
 class DriveMovement
 {
 public:
-	float mmPerStep;			// the distance we move in hypercuboid space per step of this drive
-	float elasticComp;			// the amount of elasticity compensation to apply
-	uint32_t totalSteps;		// total number of steps for this move
-	uint32_t nextStep;			// number of steps already done
-	uint32_t nextStepTime;		// how many clocks after the start of this move the next step is due
-	bool moving;				// true if this drive moves in this move, if false then all other values are don't cares
-	bool direction;				// forwards or backwards?
+	// These values don't depend on how the move is executed, so  are set by Init()
+	float dv;									// proportion of total movement for this drive
+	float stepsPerMm;							// steps per mm of movement in hypercuboid space
+//	float mmPerStep;							// the distance we move in hypercuboid space per step of this drive
+	float elasticComp;							// the amount of elasticity compensation to apply
+	uint32_t totalSteps;						// total number of steps for this move
+	uint64_t twoCsquaredTimesMmPerStepDivA;		// 2 * clock^2 * mmPerStepInHyperCuboidSpace / acceleration
+	bool moving;								// true if this drive moves in this move, if false then all other values are don't cares
+	bool direction;								// forwards or backwards?
+
+	// These values depend on how the move is executed, so they are set by Prepare()
+	uint32_t accelStopStep;						// the first step number at which we are no longer accelerating
+	uint32_t decelStartStep;					// the first step number at which we are decelerating
+	uint32_t mmPerStepTimesCdivtopSpeed;		// mmPerStepInHyperCuboidSpace * clock / topSpeed
+
+	// These values change as the step is executed
+	uint32_t nextStep;							// number of steps already done
+	uint32_t nextStepTime;						// how many clocks after the start of this move the next step is due
+
+	void DebugPrint() const;
 };
 
 /**
@@ -26,7 +39,7 @@ public:
  */
 class DDA
 {
-	friend class Move;		// TODO eliminate this
+//	friend class Move;		// TODO eliminate this
 
 #if 0
 	// Type of a DDA movement
@@ -45,7 +58,8 @@ public:
 	enum DDAState
 	{
 		empty,				// empty or being filled in
-		ready,				// ready, but could be subject to modifications
+		provisional,		// ready, but could be subject to modifications
+		frozen,				// ready, no further modifications allowed
 		executing,			// steps are currently being generated for this DDA
 		completed			// move has been completed or aborted
 	};
@@ -60,6 +74,7 @@ public:
 	void SetNext(DDA *n) { next = n; }
 	void SetPrevious(DDA *p) { prev = p; }
 	void Release() { state = empty; }
+	void Prepare();													// calculate all the values and freeze this DDA
 
 	DDAState GetState() const { return state; }
 	DDA* GetNext() const { return next; }
@@ -72,10 +87,13 @@ public:
 	void MoveAborted();
 	void SetDriveCoordinate(int32_t a, size_t drive);				// Force an end point
 	void SetFeedRate(float rate) { requestedSpeed = rate; }
+	void DebugPrint() const;
+
+	static uint32_t isqrt(uint64_t num);
 
 private:
-	static const uint32_t stepClockRate = VARIANT_MCK/2;			// the frequency of the clock used for stepper pulse timing
-	static const uint32_t minInterruptInterval = stepClockRate/500000u;		// 2us minimum interval between interrupts, in clocks
+	static const uint32_t stepClockRate = VARIANT_MCK/32;			// the frequency of the clock used for stepper pulse timing (using TIMER_CLOCK3), about 0.38us resolution
+	static const uint32_t minInterruptInterval = 6;					// about 2us minimum interval between interrupts, in clocks
 	static const uint32_t settleClocks = stepClockRate/50;			// settling time after hitting an endstop (20ms)
 
 	float AdjustEndSpeed(float idealStartSpeed, const float *directionVector);	// adjust the end speed to match the following move
@@ -90,21 +108,31 @@ private:
 	EndstopChecks endStopsToCheck;			// Which endstops we are checking on this move
     float totalDistance;					// How long is the move in hypercuboid distance
 	float acceleration;						// The acceleration to use
-	float recipAccel;
     float requestedSpeed;
 
     // These vary depending on how we connect the move with its predecessor and successor, but remain constant while the move is being executed
-	float topSpeed;
 //	float idealStartSpeed;
 	float startSpeed;
+	float topSpeed;
+	float accelDistance;
+	float decelStartDistance;
 	float accelStopTime;
 	float decelStartTime;
-	float accelStopDistance;
-	float decelStartDistance;
 	float totalTime;
+
+	// These are calculated from the above and used in the ISR, so they are set up by Prepare()
+	uint32_t startSpeedTimesCdivA;
+	uint64_t startSpeedTimesCdivAsquared;
+	uint32_t topSpeedTimesCdivA;
+	uint64_t topSpeedTimesCdivAsquared;
+	uint32_t accelClocksMinusAccelDistanceTimesCdivTopSpeed;
+	uint64_t twoDecelStartDistanceTimesCsquareddDivA;
+	uint32_t decelStartClocks;
+
 	uint32_t timeNeeded;
-	uint32_t moveStartTime;
-	uint32_t moveCompletedTime;
+	uint32_t moveStartTime;					// clock count at which the move was started
+	uint32_t firstStepTime;					// in clocks, relative to the start of the move
+	uint32_t moveCompletedTime;				// in clocks, relative to the start of the move
 
 	DriveMovement ddm[DRIVES];				// These describe the state of each drive movement
 

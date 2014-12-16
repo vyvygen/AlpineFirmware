@@ -155,7 +155,7 @@ void Move::Spin()
 		while (limitDda->GetState() != DDA::empty && timeToRun < freezeTime)
 		{
 			timeToRun += limitDda->GetTimeNeeded();
-			limitDda = limitDda->next;
+			limitDda = limitDda->GetNext();
 			if (limitDda == newDda)
 			{
 				limitDda = nullptr;
@@ -177,6 +177,12 @@ void Move::Spin()
 
 	if (currentDda == nullptr)
 	{
+		DDA *dda = ddaRingGetPointer;
+		if (dda->GetState() == DDA::provisional)
+		{
+			dda->Prepare();
+			dda->DebugPrint();
+		}
 		if (StartNextMove(Platform::GetInterruptClocks()))		// start the next move if none is executing already
 		{
 			cpu_irq_disable();
@@ -291,9 +297,14 @@ void Move::SetFeedrate(float feedRate)
 	}
 }
 
+uint32_t maxStepTime=0, maxCalcTime=0;	//DEBUG
+
 void Move::Diagnostics()
 {
 	reprap.GetPlatform()->AppendMessage(BOTH_MESSAGE, "Move Diagnostics:\n");
+
+	reprap.GetPlatform()->AppendMessage(BOTH_MESSAGE, "MaxStepClocks: %u, maxCalcClocks: %u\n", maxStepTime, maxCalcTime);
+	maxStepTime = maxCalcTime = 0;
 
 #if 0
   if(active)

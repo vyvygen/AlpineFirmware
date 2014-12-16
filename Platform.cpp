@@ -749,19 +749,21 @@ void FanInterrupt()
 void Platform::InitialiseInterrupts()
 {
 	// Timer interrupt for stepper motors
+	// The clock rate we use is a compromise. Too fast and the 64-bit square roots take a long time to execute. Too slow and we lose resolution.
+	// We choose a clock divisor of 32, which gives us 0.38us resolution. The next option is 128 which would give 1.524us resolution.
 	pmc_set_writeprotect(false);
 	pmc_enable_periph_clk((uint32_t) TC3_IRQn);
-	TC_Configure(TC1, 0, TC_CMR_WAVE | TC_CMR_WAVSEL_UP | TC_CMR_TCCLKS_TIMER_CLOCK1);
+	TC_Configure(TC1, 0, TC_CMR_WAVE | TC_CMR_WAVSEL_UP | TC_CMR_TCCLKS_TIMER_CLOCK3);
 	TC1 ->TC_CHANNEL[0].TC_IDR = ~(uint32_t)0;				// interrupts disabled for now
 	TC_Start(TC1, 0);
 	TC_GetStatus(TC1, 0);									// clear any pending interrupt
 	NVIC_EnableIRQ(TC3_IRQn);
 
-	// Timer interrupt to keep the networking timers running (called at 8Hz)
+	// Timer interrupt to keep the networking timers running (called at 16Hz)
 	pmc_enable_periph_clk((uint32_t) TC4_IRQn);
 	TC_Configure(TC1, 1, TC_CMR_WAVE | TC_CMR_WAVSEL_UP_RC | TC_CMR_TCCLKS_TIMER_CLOCK2);
-	uint32_t rc = VARIANT_MCK/8/16; // 8 because we selected TIMER_CLOCK2 above
-	TC_SetRA(TC1, 1, rc/2); // 50% high, 50% low
+	uint32_t rc = (VARIANT_MCK/8)/16;						// 8 because we selected TIMER_CLOCK2 above
+	TC_SetRA(TC1, 1, rc/2);									// 50% high, 50% low
 	TC_SetRC(TC1, 1, rc);
 	TC_Start(TC1, 1);
 	TC1 ->TC_CHANNEL[1].TC_IER = TC_IER_CPCS;
@@ -778,6 +780,9 @@ void Platform::InitialiseInterrupts()
 	active = true;							// this enables the tick interrupt, which keeps the watchdog happy
 }
 
+#pragma GCC push_options
+#pragma GCC optimize ("O3")
+
 // Schedule an interrupt at the specified clock count, or return true if that time is imminent or has passed already
 /*static*/ bool Platform::ScheduleInterrupt(uint32_t tim)
 {
@@ -786,7 +791,7 @@ void Platform::InitialiseInterrupts()
 	TC_GetStatus(TC1, 0);									// clear any pending interrupt
 	int32_t diff = (int32_t)(tim - TC_ReadCV(TC1, 0));		// see how long we have to go
 	bool ret;
-	if (diff < (int32_t)((VARIANT_MCK/2)/2000000))			// if less than 0.5us or already passed
+	if (diff < 2)											// if less than 0.5us or already passed
 	{
 		ret = true;											// tell the caller to simulate an interrupt instead
 	}
@@ -803,6 +808,8 @@ void Platform::InitialiseInterrupts()
 	cpu_irq_restore(flags);									// restore interrupt enable status
 	return ret;
 }
+
+#pragma GCC pop_options
 
 #if 0	// not used
 void Platform::DisableInterrupts()
@@ -823,6 +830,9 @@ void Platform::DisableInterrupts()
 //     We do this here because the usual polling loop sometimes gets stuck trying to send data to the USB port.
 
 //#define TIME_TICK_ISR	1		// define this to store the tick ISR time in errorCodeBits
+
+#pragma GCC push_options
+#pragma GCC optimize ("O3")
 
 void Platform::Tick()
 {
@@ -911,6 +921,8 @@ void Platform::Tick()
 	}
 	return (adc_channel_num_t) (int) g_APinDescription[pin].ulADCChannelNumber;
 }
+
+#pragma GCC pop_options
 
 //*************************************************************************************************
 
