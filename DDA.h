@@ -123,7 +123,7 @@ private:
 	// These are calculated from the above and used in the ISR, so they are set up by Prepare()
 	uint32_t startSpeedTimesCdivA;
 	uint64_t startSpeedTimesCdivAsquared;
-	uint32_t topSpeedTimesCdivA;
+	uint32_t topSpeedTimesCdivAPlusDecelStartClocks;
 	uint64_t topSpeedTimesCdivAsquared;
 	uint32_t accelClocksMinusAccelDistanceTimesCdivTopSpeed;
 	uint64_t twoDecelStartDistanceTimesCsquareddDivA;

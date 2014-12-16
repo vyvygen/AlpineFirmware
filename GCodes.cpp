@@ -27,7 +27,8 @@
 
 const char GCodes::axisLetters[AXES] = {'X', 'Y', 'Z'};
 
-const float secondsToMinutes = 1.0/60.0;
+const float minutesToSeconds = 60.0;
+const float secondsToMinutes = 1.0/minutesToSeconds;
 
 GCodes::GCodes(Platform* p, Webserver* w)
 {
@@ -367,7 +368,7 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 
 	if(gb->Seen(feedrateLetter))
 	{
-		moveBuffer[DRIVES] = gb->GetFValue() * distanceScale * secondsToMinutes; // G Code feedrates are in mm/minute; we need mm/sec
+		moveBuffer[DRIVES] = gb->GetFValue() * distanceScale * speedFactor;
 	}
 
 	// First do extrusion, and check, if we are extruding, that we have a tool to extrude with
@@ -2766,7 +2767,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 					}
 
 					reply.catf("%c: %.1f%c ", axisLetters[axis],
-							platform->HomeFeedRate(axis) * 60.0 / distanceScale, comma);
+							platform->HomeFeedRate(axis) * minutesToSeconds / distanceScale, comma);
 				}
 				reply.cat("\n");
 			}
@@ -2776,7 +2777,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 	case 220:	// Set/report speed factor override percentage
 		if (gb->Seen('S'))
 		{
-			float newSpeedFactor = gb->GetFValue()/(60.0 * 100.0);		// include the conversion from mm/minute to mm/second
+			float newSpeedFactor = (gb->GetFValue()/100.0) * secondsToMinutes;		// include the conversion from mm/minute to mm/second
 			if (newSpeedFactor > 0)
 			{
 				speedFactorChange *= newSpeedFactor/speedFactor;
@@ -2785,7 +2786,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 		}
 		else
 		{
-			reply.printf("Speed factor override: %.1f%%\n", speedFactor * (60.0 * 100.0));
+			reply.printf("Speed factor override: %.1f%%\n", speedFactor * minutesToSeconds * 100.0);
 		}
 		break;
 

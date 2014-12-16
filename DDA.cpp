@@ -38,11 +38,11 @@ void DDA::DebugPrint() const
 				" topv=%f startv=%f tstopa=%f tstartd=%f ttotal=%f dstopa=%f dstartd=%f",
 				firstStepTime, totalDistance, acceleration, requestedSpeed,
 				topSpeed, startSpeed, accelStopTime, decelStartTime, totalTime, accelDistance, decelStartDistance);
-	debugPrintf(" sstcda=%u sstcda2=" PRIu64 " tstcda=%u tstdca2=" PRIu64
-				" adtcdtsmac=%u 2dsdtc2diva=" PRIu64 " dsc=%u"
+	debugPrintf(" sstcda=%u sstcda2=" PRIu64 " tstcdapdsc=%u tstdca2=" PRIu64
+				" adtcdtsmac=%u 2dsdtc2diva=" PRIu64
 				"\n",
-				startSpeedTimesCdivA, startSpeedTimesCdivAsquared, topSpeedTimesCdivA, topSpeedTimesCdivAsquared,
-				accelClocksMinusAccelDistanceTimesCdivTopSpeed, twoDecelStartDistanceTimesCsquareddDivA, decelStartClocks);
+				startSpeedTimesCdivA, startSpeedTimesCdivAsquared, topSpeedTimesCdivAPlusDecelStartClocks, topSpeedTimesCdivAsquared,
+				accelClocksMinusAccelDistanceTimesCdivTopSpeed, twoDecelStartDistanceTimesCsquareddDivA);
 	ddm[1].DebugPrint();
 }
 
@@ -190,12 +190,13 @@ void DDA::Prepare()
 {
 	startSpeedTimesCdivA = (uint32_t)((startSpeed * (float)stepClockRate)/acceleration);
 	startSpeedTimesCdivAsquared = (uint64_t)startSpeedTimesCdivA * startSpeedTimesCdivA;
-	topSpeedTimesCdivA = (uint32_t)((topSpeed * (float)stepClockRate)/acceleration);
+	uint32_t topSpeedTimesCdivA = (uint32_t)((topSpeed * (float)stepClockRate)/acceleration);
+	uint32_t decelStartClocks = decelStartTime * (float)stepClockRate;
+	topSpeedTimesCdivAPlusDecelStartClocks = topSpeedTimesCdivA + decelStartClocks;
 	topSpeedTimesCdivAsquared = (uint64_t)topSpeedTimesCdivA * topSpeedTimesCdivA;
 	uint32_t accelClocks = (uint32_t)(accelStopTime * (float)stepClockRate);
 	accelClocksMinusAccelDistanceTimesCdivTopSpeed = accelClocks - (uint32_t)((accelDistance * (float)stepClockRate)/topSpeed);
 	twoDecelStartDistanceTimesCsquareddDivA = (uint64_t)(((float)stepClockRate * (float)stepClockRate * decelStartDistance)/acceleration) * 2;
-	decelStartClocks = decelStartTime * (float)stepClockRate;
 
 	firstStepTime = NoStepTime;
 	for (size_t i = 0; i < DRIVES; ++i)
@@ -335,6 +336,70 @@ if (t3 > maxCalcTime) maxCalcTime = t3;
 	return false;
 }
 
+// Fast 64-bit integer square root function
+/* static */ uint32_t DDA::isqrt(uint64_t num)
+{
+	uint32_t numHigh = (uint32_t)(num >> 32);
+	if (numHigh != 0)
+	{
+		uint32_t bitHigh = 1u << 16;
+		if (num > bitHigh)
+		{
+			bitHigh = 1u << 30;
+		}
+
+		while (bitHigh > numHigh)
+		{
+			bitHigh >>= 2;
+		}
+		uint64_t bit64 = static_cast<uint64_t>(bitHigh) << 32;	// "bit" starts at the highest power of four <= the argument
+		num -= bit64;
+		uint64_t res64 = bit64;
+		bit64 >>= 2;
+
+		do
+		{
+			if (num >= res64 + bit64)
+			{
+				num -= res64 + bit64;
+				res64 = (res64 >> 1) + bit64;
+			}
+			else
+			{
+				res64 >>= 1;
+			}
+			bit64 >>= 2;
+		} while (bit64 != 0);
+		return (uint32_t)res64;
+	}
+	else
+	{
+		// 32-bit square root
+		uint32_t num32 = (uint32_t)num;
+		uint32_t bit32 = 1u << 30;
+		while (bit32 > num32)
+		{
+			bit32 >>= 2;
+		}
+		uint32_t res32 = 0;
+
+		while (bit32 != 0)
+		{
+			if (num32 >= res32 + bit32)
+			{
+				num32 -= res32 + bit32;
+				res32 = (res32 >> 1) + bit32;
+			}
+			else
+			{
+				res32 >>= 1;
+			}
+			bit32 >>= 2;
+		}
+		return res32;
+	}
+}
+
 uint32_t DDA::CalcNextStepTime(DriveMovement& dm)
 {
 	++dm.nextStep;
@@ -344,7 +409,6 @@ uint32_t DDA::CalcNextStepTime(DriveMovement& dm)
 		return NoStepTime;
 	}
 
-#if 1
 	if (dm.nextStep < dm.accelStopStep)
 	{
 		dm.nextStepTime = (isqrt(startSpeedTimesCdivAsquared + (dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep)) - startSpeedTimesCdivA);
@@ -355,187 +419,15 @@ uint32_t DDA::CalcNextStepTime(DriveMovement& dm)
 	}
 	else
 	{
-		dm.nextStepTime = topSpeedTimesCdivA - isqrt(topSpeedTimesCdivAsquared - ((dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep) - twoDecelStartDistanceTimesCsquareddDivA)) + decelStartClocks;
+		dm.nextStepTime = topSpeedTimesCdivAPlusDecelStartClocks - isqrt(topSpeedTimesCdivAsquared - ((dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep) - twoDecelStartDistanceTimesCsquareddDivA));
 	}
 	//TODO include Bowden elasticity compensation and delta support
-#else
-	float distanceMoved = dm.mmPerStep * (float)(dm.nextStep);		// we could accumulate this instead of multiplying, but we might then get unacceptable rounding errors
-	float tempStepTime;
-	if (distanceMoved < accelDistance)
-	{
-		tempStepTime = (sqrt((startSpeed * startSpeed) + (acceleration * distanceMoved * 2.0)) - startSpeed) * recipAccel;
-	}
-	else if (distanceMoved < decelStartDistance)
-	{
-		tempStepTime = (distanceMoved - accelDistance)/topSpeed + accelStopTime;
-	}
-	else
-	{
-		tempStepTime = (topSpeed - sqrt((topSpeed * topSpeed) - ((distanceMoved - decelStartDistance) * acceleration * 2.0))) * recipAccel + decelStartTime;
-	}
-	//TODO include Bowden elasticity compensation and delta support
-	dm.nextStepTime = (uint32_t)(tempStepTime * (float)stepClockRate);
-#endif
 	return dm.nextStepTime;
 }
 
 void DDA::MoveAborted()
 {
 //TODO implement
-}
-
-// Return the highest power of four <= the argument
-inline uint32_t GetBit(uint32_t num)
-{
-#if 1
-	if (num >= (1 << 16))
-	{
-		if (num >= (1 << 24))
-		{
-			if (num >= (1 << 28))
-			{
-				if (num >= (1 << 30))
-				{
-					return 1 << 30;
-				}
-				else
-				{
-					return 1 << 28;
-				}
-			}
-			else if (num >= (1 << 26))
-			{
-				return 1 << 26;
-			}
-			else
-			{
-				return 1 << 24;
-			}
-		}
-		else if (num >= (1 << 20))
-		{
-			if (num >= (1 << 22))
-			{
-				return 1 << 22;
-			}
-			else
-			{
-				return 1 << 20;
-			}
-		}
-		else if (num >= (1 << 18))
-		{
-			return 1 << 18;
-		}
-		else
-		{
-			return 1 << 16;
-		}
-	}
-	else if (num >= (1 << 8))
-	{
-		if (num >= (1 << 12))
-		{
-			if (num >= (1 << 14))
-			{
-				return 1 << 14;
-			}
-			else
-			{
-				return 1 << 12;
-			}
-		}
-		else if (num >= (1 << 10))
-		{
-			return 1 << 10;
-		}
-		else
-		{
-			return 1 << 8;
-		}
-	}
-	else if (num >= (1 << 4))
-	{
-		if (num >= (1 << 6))
-		{
-			return 1 << 6;
-		}
-		else
-		{
-			return 1 << 4;
-		}
-	}
-	else if (num >= (1 >> 2))
-	{
-		return 1 << 2;
-	}
-	else
-	{
-		return 1;
-	}
-#else
-	uint32_t bit = 1 << 30;
-	while (bit > num)
-	{
-		bit >>= 2;
-	}
-	return bit;
-#endif
-}
-
-// Fast 64-bit integer square root function
-/* static */ uint32_t DDA::isqrt(uint64_t num)
-{
-	uint32_t numHigh = num >> 32;
-	if (numHigh != 0)
-	{
-		uint64_t res = 0;
-		uint64_t bit = static_cast<uint64_t>(GetBit(numHigh)) << 32;	// "bit" starts at the highest power of four <= the argument
-
-		if (num >= bit)
-		{
-			num -=  bit;
-			res = bit;
-		}
-		bit >>= 2;
-
-		do
-		{
-			if (num >= res + bit)
-			{
-				num -= res + bit;
-				res = (res >> 1) + bit;
-			}
-			else
-			{
-				res >>= 1;
-			}
-			bit >>= 2;
-		} while (bit != 0);
-		return (uint32_t)res;
-	}
-	else
-	{
-		// 32-bit square root
-		uint32_t num32 = (uint32_t)num;
-		uint32_t bit = GetBit(num32);
-		uint32_t res = 0;
-
-		while (bit != 0)
-		{
-			if (num32 >= res + bit)
-			{
-				num32 -= res + bit;
-				res = (res >> 1) + bit;
-			}
-			else
-			{
-				res >>= 1;
-			}
-			bit >>= 2;
-		}
-		return res;
-	}
 }
 
 // End
