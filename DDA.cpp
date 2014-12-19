@@ -8,23 +8,23 @@
 //****************************************************************************************************
 
 #include "RepRapFirmware.h"
-//#include <cinttypes>
-#define PRIu64	"%llu"
 
 const uint32_t NoStepTime = 0xFFFFFFFF;		// value to indicate that no further steps are needed when calculating the next step time
 
-void DriveMovement::DebugPrint() const
+const uint32_t mmPerStepFactor = 1024;		// a power of 2 used to multiply the value mmPerStepTimesCdivtopSpeed for better accuracy
+
+void DriveMovement::DebugPrint(char c) const
 {
 	if (moving)
 	{
-		debugPrintf("DM: dv=%f stepsPerMm=%f totSteps=%u 2CsqtMmPerStepDivA=" PRIu64 " accelStopStep=%u decelStartStep=%u mmPerStepTimesCdivtopSpeed=%u"
+		debugPrintf("DM%c: dv=%f stepsPerMm=%f totSteps=%u 2CsqtMmPerStepDivA=%" PRIu64 " accelStopStep=%u decelStartStep=%u mmPerStepTimesCdivtopSpeed=%u"
 					"\n",
-					dv, stepsPerMm, totalSteps, twoCsquaredTimesMmPerStepDivA, accelStopStep, decelStartStep, mmPerStepTimesCdivtopSpeed
+					c, dv, stepsPerMm, totalSteps, twoCsquaredTimesMmPerStepDivA, accelStopStep, decelStartStep, mmPerStepTimesCdivtopSpeed
 					);
 	}
 	else
 	{
-		debugPrintf("DM: not moving\n");
+		debugPrintf("DM%c: not moving\n", c);
 	}
 }
 
@@ -38,12 +38,14 @@ void DDA::DebugPrint() const
 				" topv=%f startv=%f tstopa=%f tstartd=%f ttotal=%f dstopa=%f dstartd=%f",
 				firstStepTime, totalDistance, acceleration, requestedSpeed,
 				topSpeed, startSpeed, accelStopTime, decelStartTime, totalTime, accelDistance, decelStartDistance);
-	debugPrintf(" sstcda=%u sstcda2=" PRIu64 " tstcdapdsc=%u tstdca2=" PRIu64
-				" adtcdtsmac=%u 2dsdtc2diva=" PRIu64
+	debugPrintf(" sstcda=%u sstcda2=%" PRIu64 " tstcdapdsc=%u tstdca2=%" PRIu64
+				" adtcdtsmac=%u"
 				"\n",
-				startSpeedTimesCdivA, startSpeedTimesCdivAsquared, topSpeedTimesCdivAPlusDecelStartClocks, topSpeedTimesCdivAsquared,
-				accelClocksMinusAccelDistanceTimesCdivTopSpeed, twoDecelStartDistanceTimesCsquareddDivA);
-	ddm[1].DebugPrint();
+				startSpeedTimesCdivA, startSpeedTimesCdivAsquared, topSpeedTimesCdivAPlusDecelStartClocks, topSpeedTimesCdivAsquaredPlusTwoDecelStartDistanceTimesCsquareddDivA,
+				accelClocksMinusAccelDistanceTimesCdivTopSpeed);
+	ddm[0].DebugPrint('x');
+	ddm[1].DebugPrint('y');
+	ddm[2].DebugPrint('z');
 }
 
 // Set up a dummy move at the start of the ring so that Move can find the last move endpoint
@@ -182,7 +184,7 @@ void DDA::SetDriveCoordinate(int32_t a, size_t drive)
 }
 
 
-// The remaining functions are speed-critical, so use full optimization
+// The remaining functions are speed-critical, so use full optimisation
 #pragma GCC optimize ("O3")
 
 // Prepare this DDA for execution
@@ -193,10 +195,10 @@ void DDA::Prepare()
 	uint32_t topSpeedTimesCdivA = (uint32_t)((topSpeed * (float)stepClockRate)/acceleration);
 	uint32_t decelStartClocks = decelStartTime * (float)stepClockRate;
 	topSpeedTimesCdivAPlusDecelStartClocks = topSpeedTimesCdivA + decelStartClocks;
-	topSpeedTimesCdivAsquared = (uint64_t)topSpeedTimesCdivA * topSpeedTimesCdivA;
+	topSpeedTimesCdivAsquaredPlusTwoDecelStartDistanceTimesCsquareddDivA =
+		((uint64_t)topSpeedTimesCdivA * topSpeedTimesCdivA) + ((uint64_t)(((float)stepClockRate * (float)stepClockRate * decelStartDistance)/acceleration) * 2);
 	uint32_t accelClocks = (uint32_t)(accelStopTime * (float)stepClockRate);
 	accelClocksMinusAccelDistanceTimesCdivTopSpeed = accelClocks - (uint32_t)((accelDistance * (float)stepClockRate)/topSpeed);
-	twoDecelStartDistanceTimesCsquareddDivA = (uint64_t)(((float)stepClockRate * (float)stepClockRate * decelStartDistance)/acceleration) * 2;
 
 	firstStepTime = NoStepTime;
 	for (size_t i = 0; i < DRIVES; ++i)
@@ -206,7 +208,7 @@ void DDA::Prepare()
 		{
 			dm.accelStopStep = (uint32_t)(accelDistance * dm.stepsPerMm) + 1;
 			dm.decelStartStep = (uint32_t)(decelStartDistance * dm.stepsPerMm) + 1;
-			dm.mmPerStepTimesCdivtopSpeed = (uint32_t)((float)stepClockRate/(dm.stepsPerMm * topSpeed));
+			dm.mmPerStepTimesCdivtopSpeed = (uint32_t)(((float)stepClockRate * (float)mmPerStepFactor)/(dm.stepsPerMm * topSpeed));
 			uint32_t st = CalcNextStepTime(dm);
 			if (st < firstStepTime)
 			{
@@ -246,14 +248,42 @@ bool DDA::Start(uint32_t tim)
 			DriveMovement& dm = ddm[i];
 			if (dm.moving)
 			{
-				reprap.GetPlatform()->SetDirection(i, dm.direction);
+				reprap.GetPlatform()->SetDirection(i, dm.direction, true);
 			}
 		}
 		return reprap.GetPlatform()->ScheduleInterrupt(firstStepTime + moveStartTime);
 	}
 }
 
-extern uint32_t maxStepTime, maxCalcTime;	//DEBUG
+extern uint32_t /*maxStepTime,*/ maxCalcTime, minCalcTime, maxReps, sqrtErrors, lastRes; extern uint64_t lastNum;	//DEBUG
+
+inline uint32_t DDA::CalcNextStepTime(DriveMovement& dm)
+{
+	++dm.nextStep;
+	if (dm.nextStep > dm.totalSteps)
+	{
+		dm.moving = false;
+		return NoStepTime;
+	}
+
+	if (dm.nextStep < dm.accelStopStep)
+	{
+		dm.nextStepTime = (isqrt(startSpeedTimesCdivAsquared + (dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep)) - startSpeedTimesCdivA);
+	}
+	else if (dm.nextStep < dm.decelStartStep)
+	{
+		dm.nextStepTime = (uint32_t)(((uint64_t)dm.mmPerStepTimesCdivtopSpeed * dm.nextStep)/mmPerStepFactor) + accelClocksMinusAccelDistanceTimesCdivTopSpeed;
+	}
+	else
+	{
+		uint64_t temp = dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep;
+		dm.nextStepTime = (temp > topSpeedTimesCdivAsquaredPlusTwoDecelStartDistanceTimesCsquareddDivA)
+								? topSpeedTimesCdivAPlusDecelStartClocks
+								: topSpeedTimesCdivAPlusDecelStartClocks - isqrt(topSpeedTimesCdivAsquaredPlusTwoDecelStartDistanceTimesCsquareddDivA - temp);
+	}
+	//TODO include Bowden elasticity compensation and delta support
+	return dm.nextStepTime;
+}
 
 bool DDA::Step()
 {
@@ -263,9 +293,12 @@ bool DDA::Step()
 	}
 
 	bool repeat;
+uint32_t numReps = 0;
 	do
 	{
-		uint32_t now = Platform::GetInterruptClocks() - moveStartTime;
+++numReps;
+if (numReps > maxReps) maxReps = numReps;
+		uint32_t now = Platform::GetInterruptClocks() - moveStartTime;		// how long since the move started
 		uint32_t nextInterruptTime = NoStepTime;
 		for (size_t drive = 0; drive < DRIVES; ++drive)
 		{
@@ -277,19 +310,21 @@ bool DDA::Step()
 				{
 					if (st0 > moveCompletedTime)
 					{
-						moveCompletedTime = st0;			// save in case the move has finished
+						moveCompletedTime = st0;							// save in case the move has finished
 					}
-uint32_t t1 = Platform::GetInterruptClocks();
-					reprap.GetPlatform()->Step(drive);
-uint32_t t2 = Platform::GetInterruptClocks();
-if (t2 - t1 > maxStepTime) maxStepTime = t2 - t1;
+//uint32_t t1 = Platform::GetInterruptClocks();
+					reprap.GetPlatform()->StepHigh(drive);
+//uint32_t t2 = Platform::GetInterruptClocks();
+//if (t2 - t1 > maxStepTime) maxStepTime = t2 - t1;
 					uint32_t st1 = CalcNextStepTime(dm);
 					if (st1 < nextInterruptTime)
 					{
 						nextInterruptTime = st1;
 					}
-uint32_t t3 = Platform::GetInterruptClocks() - t2;
-if (t3 > maxCalcTime) maxCalcTime = t3;
+					reprap.GetPlatform()->StepLow(drive);
+//uint32_t t3 = Platform::GetInterruptClocks() - t2;
+//if (t3 > maxCalcTime) maxCalcTime = t3;
+//if (t3 < minCalcTime) minCalcTime = t3;
 				}
 				else if (st0 < nextInterruptTime)
 				{
@@ -339,90 +374,86 @@ if (t3 > maxCalcTime) maxCalcTime = t3;
 // Fast 64-bit integer square root function
 /* static */ uint32_t DDA::isqrt(uint64_t num)
 {
+irqflags_t flags = cpu_irq_save();
+uint32_t t2 = Platform::GetInterruptClocks();
 	uint32_t numHigh = (uint32_t)(num >> 32);
 	if (numHigh != 0)
 	{
-		uint32_t bitHigh = 1u << 16;
-		if (num > bitHigh)
-		{
-			bitHigh = 1u << 30;
+		uint32_t resHigh = 0;
+
+#define iter64a(N) 								\
+		{										\
+			uint32_t temp = resHigh + (1 << N);	\
+			if (numHigh >= temp << N)			\
+			{									\
+				numHigh -= temp << N;			\
+				resHigh |= 2 << N;				\
+			}									\
 		}
 
-		while (bitHigh > numHigh)
-		{
-			bitHigh >>= 2;
-		}
-		uint64_t bit64 = static_cast<uint64_t>(bitHigh) << 32;	// "bit" starts at the highest power of four <= the argument
-		num -= bit64;
-		uint64_t res64 = bit64;
-		bit64 >>= 2;
+		// We need to do 16 iterations
+		iter64a(15); iter64a(14); iter64a(13); iter64a(12);
+		iter64a(11); iter64a(10); iter64a(9); iter64a(8);
+		iter64a(7); iter64a(6); iter64a(5); iter64a(4);
+		iter64a(3); iter64a(2); iter64a(1); iter64a(0);
 
-		do
-		{
-			if (num >= res64 + bit64)
-			{
-				num -= res64 + bit64;
-				res64 = (res64 >> 1) + bit64;
-			}
-			else
-			{
-				res64 >>= 1;
-			}
-			bit64 >>= 2;
-		} while (bit64 != 0);
-		return (uint32_t)res64;
+		// resHigh is twice the square root of the msw, in the range 0..2^17-1
+		uint64_t res = (uint64_t)resHigh << 16;
+		uint64_t numAll = ((uint64_t)numHigh << 32) | (uint32_t)num;
+
+#define iter64b(N) 								\
+		{										\
+			uint64_t temp = res | (1 << N);		\
+			if (numAll >= temp << N)			\
+			{									\
+				numAll -= temp << N;			\
+				res |= 2 << N;					\
+			}									\
+		}
+
+		// We need to do 16 iterations
+		iter64b(15); iter64b(14); iter64b(13); iter64b(12);
+		iter64b(11); iter64b(10); iter64b(9); iter64b(8);
+		iter64b(7); iter64b(6); iter64b(5); iter64b(4);
+		iter64b(3); iter64b(2); iter64b(1); iter64b(0);
+
+		uint32_t rslt = (uint32_t)(res >> 1);
+
+		uint32_t t3 = Platform::GetInterruptClocks() - t2; if (t3 < minCalcTime) minCalcTime = t3; if (t3 > maxCalcTime) maxCalcTime = t3;
+		cpu_irq_restore(flags);
+uint64_t num3 = (uint64_t)rslt * rslt; if (num3 > num || (num - num3) > 2*rslt) {++sqrtErrors; lastNum = num; lastRes = rslt; }
+		return rslt;
 	}
 	else
 	{
 		// 32-bit square root
 		uint32_t num32 = (uint32_t)num;
-		uint32_t bit32 = 1u << 30;
-		while (bit32 > num32)
-		{
-			bit32 >>= 2;
-		}
 		uint32_t res32 = 0;
 
-		while (bit32 != 0)
-		{
-			if (num32 >= res32 + bit32)
-			{
-				num32 -= res32 + bit32;
-				res32 = (res32 >> 1) + bit32;
-			}
-			else
-			{
-				res32 >>= 1;
-			}
-			bit32 >>= 2;
+		// Thanks to Wilco Dijksra for this efficient ARM algorithm
+#define iter32(N) 								\
+		{										\
+			uint32_t temp = res32 | (1 << N);	\
+			if (num32 >= temp << N)				\
+			{									\
+				num32 -= temp << N;				\
+				res32 |= 2 << N;				\
+			}									\
 		}
+
+		// We need to do 16 iterations
+		iter32(15); iter32(14); iter32(13); iter32(12);
+		iter32(11); iter32(10); iter32(9); iter32(8);
+		iter32(7); iter32(6); iter32(5); iter32(4);
+		iter32(3); iter32(2); iter32(1); iter32(0);
+
+		res32 >>= 1;
+
+uint32_t t3 = Platform::GetInterruptClocks() - t2; if (t3 < minCalcTime) minCalcTime = t3; if (t3 > maxCalcTime) maxCalcTime = t3;
+cpu_irq_restore(flags);
+uint64_t num3 = (uint64_t)res32 * res32; if (num3 > num || (num - num3) > 2*res32) {++sqrtErrors; lastNum = num; lastRes = res32; }
 		return res32;
 	}
-}
-
-uint32_t DDA::CalcNextStepTime(DriveMovement& dm)
-{
-	++dm.nextStep;
-	if (dm.nextStep > dm.totalSteps)
-	{
-		dm.moving = false;
-		return NoStepTime;
-	}
-
-	if (dm.nextStep < dm.accelStopStep)
-	{
-		dm.nextStepTime = (isqrt(startSpeedTimesCdivAsquared + (dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep)) - startSpeedTimesCdivA);
-	}
-	else if (dm.nextStep < dm.decelStartStep)
-	{
-		dm.nextStepTime = (dm.mmPerStepTimesCdivtopSpeed * dm.nextStep) + accelClocksMinusAccelDistanceTimesCdivTopSpeed;
-	}
-	else
-	{
-		dm.nextStepTime = topSpeedTimesCdivAPlusDecelStartClocks - isqrt(topSpeedTimesCdivAsquared - ((dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep) - twoDecelStartDistanceTimesCsquareddDivA));
-	}
-	//TODO include Bowden elasticity compensation and delta support
-	return dm.nextStepTime;
 }
 
 void DDA::MoveAborted()

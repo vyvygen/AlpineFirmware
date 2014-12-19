@@ -602,11 +602,12 @@ public:
   // Movement
   
   void EmergencyStop();
-  void SetDirection(byte drive, bool direction);
+  void SetDirection(size_t drive, bool direction, bool enable);
   void SetDirectionValue(byte drive, bool dVal);
   bool GetDirectionValue(byte drive) const;
-  void Step(byte drive);
-  void Disable(byte drive); // There is no drive enable; drives get enabled automatically the first time they are used.
+  void StepHigh(size_t drive);
+  void StepLow(size_t drive);
+  void Disable(size_t drive); 									// there is no drive enable; drives get enabled automatically the first time they are used.
   void SetMotorCurrent(byte drive, float current);
   float MotorCurrent(byte drive);
   float DriveStepsPerUnit(int8_t drive) const;
@@ -1071,6 +1072,25 @@ inline float Platform::AxisTotalLength(int8_t axis) const
 	return axisMaxima[axis] - axisMinima[axis];
 }
 
+// The A4988 requires 1us minimum pulse width, so we make separate StepHigh and StepLow calls so we don't waste this time
+inline void Platform::StepHigh(size_t drive)
+{
+	const int pin = stepPins[drive];
+	if (pin >= 0)
+	{
+		digitalWriteNonDue(pin, 1);
+	}
+}
+
+inline void Platform::StepLow(size_t drive)
+{
+	const int pin = stepPins[drive];
+	if (pin >= 0)
+	{
+		digitalWriteNonDue(pin, 0);
+	}
+}
+
 //********************************************************************************************************
 
 // Drive the RepRap machine - Heat and temperature
@@ -1167,7 +1187,9 @@ inline float Platform::GetElasticComp(size_t drive) const
 // Get the interrupt clock count
 /*static*/ inline uint32_t Platform::GetInterruptClocks()
 {
-	return TC_ReadCV(TC1, 0);
+	//return TC_ReadCV(TC1, 0);
+	// sadly, the Arduino IDE does not provide the inlined version of TC_ReadCV, so use the following instead...
+	return TC1 ->TC_CHANNEL[0].TC_CV;
 }
 
 //***************************************************************************************

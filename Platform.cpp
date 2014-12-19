@@ -1144,34 +1144,28 @@ EndStopHit Platform::Stopped(int8_t drive)
 	return noStop;
 }
 
-void Platform::SetDirection(byte drive, bool direction)
+void Platform::SetDirection(size_t drive, bool direction, bool enable)
 {
 	if(directionPins[drive] < 0)
 		return;
 
-	bool d = (direction == FORWARDS) ? directions[drive] : !directions[drive];
-	digitalWriteNonDue(directionPins[drive], d);
-}
-
-void Platform::Disable(byte drive)
-{
-	if(enablePins[drive] < 0)
-		  return;
-	digitalWriteNonDue(enablePins[drive], DISABLE);
-	driveEnabled[drive] = false;
-}
-
-void Platform::Step(byte drive)
-{
-	if(stepPins[drive] < 0)
-		return;
-	if(!driveEnabled[drive] && enablePins[drive] >= 0)
+	if(enable && !driveEnabled[drive] && enablePins[drive] >= 0)
 	{
 		digitalWriteNonDue(enablePins[drive], ENABLE);
 		driveEnabled[drive] = true;
 	}
-	digitalWriteNonDue(stepPins[drive], 0);
-	digitalWriteNonDue(stepPins[drive], 1);
+	bool d = (direction == FORWARDS) ? directions[drive] : !directions[drive];
+	digitalWriteNonDue(directionPins[drive], d);
+}
+
+void Platform::Disable(size_t drive)
+{
+	const int pin = enablePins[drive];
+	if (pin >= 0)
+	{
+		digitalWriteNonDue(pin, DISABLE);
+		driveEnabled[drive] = false;
+	}
 }
 
 // current is in mA

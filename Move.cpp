@@ -32,7 +32,7 @@ void Move::Init()
 	{
 		liveCoordinates[i] = 0.0;
 		nextMachineEndPoints[i] = 0;
-		reprap.GetPlatform()->SetDirection(i, FORWARDS);
+		reprap.GetPlatform()->SetDirection(i, FORWARDS, false);
 	}
 
 	// Empty the ring
@@ -297,14 +297,16 @@ void Move::SetFeedrate(float feedRate)
 	}
 }
 
-uint32_t maxStepTime=0, maxCalcTime=0;	//DEBUG
+uint32_t maxStepTime=0, maxCalcTime=0, minCalcTime = 999, maxReps = 0, sqrtErrors = 0, lastRes = 0; uint64_t lastNum = 0;	//DEBUG
 
 void Move::Diagnostics()
 {
 	reprap.GetPlatform()->AppendMessage(BOTH_MESSAGE, "Move Diagnostics:\n");
 
-	reprap.GetPlatform()->AppendMessage(BOTH_MESSAGE, "MaxStepClocks: %u, maxCalcClocks: %u\n", maxStepTime, maxCalcTime);
-	maxStepTime = maxCalcTime = 0;
+	reprap.GetPlatform()->AppendMessage(BOTH_MESSAGE, "MaxStepClocks: %u, minCalcClocks: %u, maxCalcClocks: %u, maxReps: %u, sqrtErrors: %u, lastRes: %u, lastNum: %" PRIu64 "\n",
+										maxStepTime, minCalcTime, maxCalcTime, maxReps, sqrtErrors, lastRes, lastNum);
+	maxStepTime = maxCalcTime = maxReps = 0;
+	minCalcTime = 999;
 
 #if 0
   if(active)

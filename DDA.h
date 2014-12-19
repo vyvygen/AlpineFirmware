@@ -31,7 +31,7 @@ public:
 	uint32_t nextStep;							// number of steps already done
 	uint32_t nextStepTime;						// how many clocks after the start of this move the next step is due
 
-	void DebugPrint() const;
+	void DebugPrint(char c) const;
 };
 
 /**
@@ -124,9 +124,8 @@ private:
 	uint32_t startSpeedTimesCdivA;
 	uint64_t startSpeedTimesCdivAsquared;
 	uint32_t topSpeedTimesCdivAPlusDecelStartClocks;
-	uint64_t topSpeedTimesCdivAsquared;
+	uint64_t topSpeedTimesCdivAsquaredPlusTwoDecelStartDistanceTimesCsquareddDivA;
 	uint32_t accelClocksMinusAccelDistanceTimesCdivTopSpeed;
-	uint64_t twoDecelStartDistanceTimesCsquareddDivA;
 	uint32_t decelStartClocks;
 
 	uint32_t timeNeeded;
