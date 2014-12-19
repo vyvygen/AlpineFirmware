@@ -2043,6 +2043,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			if (sparam == 2)
 			{
 				reprap.GetFilesResponse(reply, dir);			// Send the file list in JSON format
+				reply.cat("\n");
 			}
 			else
 			{
@@ -2213,6 +2214,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 		{
 			const char* filename = gb->GetUnprecedentedString(true);	// get filename, or NULL if none provided
 			reprap.GetFileInfoResponse(reply, filename);
+			reply.cat("\n");
 		}
 		break;
 
@@ -2334,9 +2336,11 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			{
 			case 2:
 				reprap.GetStatusResponse(reply, 2);				// send JSON-formatted status response
+				reply.cat("\n");
 				break;
 			case 3:
 				reprap.GetStatusResponse(reply, 3);				// send extended JSON-formatted response
+				reply.cat("\n");
 				break;
 			default:
 				reply.copy("T:");
