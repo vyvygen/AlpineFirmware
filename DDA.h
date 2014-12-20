@@ -32,6 +32,17 @@ public:
 	uint32_t nextStepTime;						// how many clocks after the start of this move the next step is due
 
 	void DebugPrint(char c) const;
+
+	// Given an overall speed, return the signed speed of this drive
+	float GetDriveSpeed(float speed) const
+	{
+		if (moving)
+		{
+			float res = speed * dv;
+			return (direction) ? -res : res;
+		}
+		return 0.0;
+	}
 };
 
 /**
@@ -66,21 +77,19 @@ public:
 
 	DDA(DDA* n);
 
-	void Init(int32_t ep[], float distanceMoved, float reqSpeed, float acc,	// Set up this move
-			const float *directionVector, EndstopChecks ce, const DDA *limitDda);
+	bool Init(const float nextMove[], EndstopChecks ce);			// Set up a new move, returning true if it represents real movement
 	void Init();													// Set up initial positions for machine startup
 	bool Start(uint32_t tim);										// Start executing the DDA, i.e. move the move.
 	bool Step();													// Take one step of the DDA, called by timed interrupt.
 	void SetNext(DDA *n) { next = n; }
 	void SetPrevious(DDA *p) { prev = p; }
 	void Release() { state = empty; }
-	void Prepare();													// calculate all the values and freeze this DDA
+	void Prepare();													// Calculate all the values and freeze this DDA
 
 	DDAState GetState() const { return state; }
 	DDA* GetNext() const { return next; }
 	DDA* GetPrevious() const { return prev; }
-	uint32_t GetTimeNeeded() const { return timeNeeded; }
-	uint32_t GetTimeLeft() const { return 0; }						//TODO implement this properly
+	int32_t GetTimeLeft() const;
 	float MachineToEndPoint(size_t drive) const;					// Convert a move endpoint to real mm coordinates
 	static int32_t EndPointToMachine(size_t drive, float coord);
 	const int32_t *MachineCoordinates() const { return endPoint; }	// Get endpoints of a move in machine coordinates
@@ -91,12 +100,13 @@ public:
 
 	static uint32_t isqrt(uint64_t num);
 
-private:
 	static const uint32_t stepClockRate = VARIANT_MCK/32;			// the frequency of the clock used for stepper pulse timing (using TIMER_CLOCK3), about 0.38us resolution
+
+private:
 	static const uint32_t minInterruptInterval = 6;					// about 2us minimum interval between interrupts, in clocks
 	static const uint32_t settleClocks = stepClockRate/50;			// settling time after hitting an endstop (20ms)
 
-	float AdjustEndSpeed(float idealStartSpeed, const float *directionVector);	// adjust the end speed to match the following move
+	float AdjustEndSpeed(float idealStartSpeed);					// adjust the end speed to match the following move
 	uint32_t CalcNextStepTime(DriveMovement& dm);
 
 	DDA* next;								// The next one in the ring
@@ -111,11 +121,10 @@ private:
     float requestedSpeed;
 
     // These vary depending on how we connect the move with its predecessor and successor, but remain constant while the move is being executed
-//	float idealStartSpeed;
 	float startSpeed;
 	float topSpeed;
 	float accelDistance;
-	float decelStartDistance;
+	float decelDistance;
 	float accelStopTime;
 	float decelStartTime;
 	float totalTime;
@@ -128,14 +137,22 @@ private:
 	uint32_t accelClocksMinusAccelDistanceTimesCdivTopSpeed;
 	uint32_t decelStartClocks;
 
-	uint32_t timeNeeded;
+	uint32_t timeNeeded;					// in clocks
 	uint32_t moveStartTime;					// clock count at which the move was started
 	uint32_t firstStepTime;					// in clocks, relative to the start of the move
 	uint32_t moveCompletedTime;				// in clocks, relative to the start of the move
 
 	DriveMovement ddm[DRIVES];				// These describe the state of each drive movement
-
-	bool startPinned;
 };
+
+// Return the number of clocks this DDA still needs to execute.
+// This could be slightly negative, if the move is overdue for completion.
+inline int32_t DDA::GetTimeLeft() const
+//pre(state == executing || state == frozen || state == completed)
+{
+	return (state == completed) ? 0
+			: (state == executing) ? (int32_t)(moveStartTime + timeNeeded - Platform::GetInterruptClocks())
+			: (int32_t)timeNeeded;
+}
 
 #endif /* DDA_H_ */

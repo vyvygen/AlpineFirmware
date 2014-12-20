@@ -701,7 +701,7 @@ void Platform::SoftwareReset(uint16_t reason)
 		}
 	}
 
-	if (reason != 0 || reason != nvData.resetReason)
+	if (reason != 0)
 	{
 		// zpl-2014-11-03: Here we must ensure that no changed values are saved, so load last-known values first
 		ReadNvData();

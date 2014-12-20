@@ -618,8 +618,8 @@ public:
   float MaxFeedrate(int8_t drive) const;
   const float* MaxFeedrates() const;
   void SetMaxFeedrate(int8_t drive, float value);
-  float InstantDv(int8_t drive) const;
-  void SetInstantDv(int8_t drive, float value);
+  float InstantDv(size_t drive) const;
+  void SetInstantDv(size_t drive, float value);
   const float* InstantDvs() const;
   float HomeFeedRate(int8_t axis) const;
   void SetHomeFeedRate(int8_t axis, float value);
@@ -999,12 +999,12 @@ inline void Platform::SetMaxFeedrate(int8_t drive, float value)
 	maxFeedrates[drive] = value;
 }
 
-inline float Platform::InstantDv(int8_t drive) const
+inline float Platform::InstantDv(size_t drive) const
 {
   return instantDvs[drive]; 
 }
 
-inline void Platform::SetInstantDv(int8_t drive, float value)
+inline void Platform::SetInstantDv(size_t drive, float value)
 {
 	instantDvs[drive] = value;
 	SetSlowestDrive();

@@ -40,8 +40,8 @@ public:
     bool AllMovesAreFinished();							// Is the look-ahead ring empty?  Stops more moves being added as well.
     void ResumeMoving();								// Allow moves to be added after a call to AllMovesAreFinished()
     void DoLookAhead();									// Run the look-ahead procedure
-    void HitLowStop(int8_t drive, DDA* hitDDA);			// What to do when a low endstop is hit
-    void HitHighStop(int8_t drive, DDA* hitDDA);		// What to do when a high endstop is hit
+    void HitLowStop(size_t drive, DDA* hitDDA);			// What to do when a low endstop is hit
+    void HitHighStop(size_t drive, DDA* hitDDA);		// What to do when a high endstop is hit
     void SetPositions(float move[]);					// Force the coordinates to be these
     void SetFeedrate(float feedRate);					// Sometimes we want to override the feed rate
     void SetLiveCoordinates(float coords[]);			// Force the live coordinates (see above) to be these

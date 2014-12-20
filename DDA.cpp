@@ -34,10 +34,10 @@ DDA::DDA(DDA* n) : state(empty), next(n), prev(nullptr)
 
 void DDA::DebugPrint() const
 {
-	debugPrintf("DDA: irqc=%u d=%f a=%f reqv=%f"
-				" topv=%f startv=%f tstopa=%f tstartd=%f ttotal=%f dstopa=%f dstartd=%f",
+	debugPrintf("DDA: fstep=%u d=%f a=%f reqv=%f"
+				" topv=%f startv=%f tstopa=%f tstartd=%f ttotal=%f daccel=%f ddecel=%f",
 				firstStepTime, totalDistance, acceleration, requestedSpeed,
-				topSpeed, startSpeed, accelStopTime, decelStartTime, totalTime, accelDistance, decelStartDistance);
+				topSpeed, startSpeed, accelStopTime, decelStartTime, totalTime, accelDistance, decelDistance);
 	debugPrintf(" sstcda=%u sstcda2=%" PRIu64 " tstcdapdsc=%u tstdca2=%" PRIu64
 				" adtcdtsmac=%u"
 				"\n",
@@ -58,53 +58,70 @@ void DDA::Init()
 	state = empty;
 }
 
-// Set up a real move
-void DDA::Init(
-		int32_t ep[],						// the endpoints of this move (for XYZ) or the amount of movement (for extruders)
-		float distanceMoved,				// the total distance moved in mm
-		float reqSpeed,						// the requested speed in mm/sec
-		float acc,							// the acceleration in mm/sec^2
-		const float *directionVector,		// the unit direction vector normalised to the positive hyperquadrant
-		EndstopChecks ce,					// which axis endstops we must check in this move
-		const DDA *limitDda)				// the earliest of the preceding DDAs whose end speed we can adjust, or nullptr if we can't adjust any of them
+// Set up a real move. Return true if it represents real movement, alse false.
+bool DDA::Init(const float nextMove[], EndstopChecks ce)
 {
-	// 1. Store some values
-	endStopsToCheck = ce;
-	totalDistance = distanceMoved;
-	requestedSpeed = reqSpeed;
-	acceleration = acc;
-
-	const int32_t *startPosition = prev->MachineCoordinates();
-
-	for (size_t i = 0; i < DRIVES; ++i)
+	// 1. Computer the new endpoints and the movement vector
+	bool realMove = false;
+	const int32_t *positionNow = prev->MachineCoordinates();
+	float normalisedDirectionVector[DRIVES];	// Used to hold a unit-length vector in the direction of motion
+	for (size_t drive = 0; drive < DRIVES; drive++)
 	{
-		int32_t thisEndpoint = ep[i];
-		endPoint[i] = thisEndpoint;
-		int32_t delta = (i < AXES) ? thisEndpoint - startPosition[i] : thisEndpoint;
-		DriveMovement& dm = ddm[i];
+		int32_t ep = EndPointToMachine(drive, nextMove[drive]);
+		endPoint[drive] = ep;
+		int32_t delta = (drive < AXES) ? ep - positionNow[drive] : ep;
+		normalisedDirectionVector[drive] = (float)delta/reprap.GetPlatform()->DriveStepsPerUnit(drive);
+		DriveMovement& dm = ddm[drive];
 		dm.moving = (delta != 0);
 		if (dm.moving)
 		{
-			dm.nextStep = 0;
+			realMove = true;
 			dm.totalSteps = labs(delta);
 			dm.direction = (delta >= 0);
-			dm.dv = directionVector[i];
+		}
+	}
+
+	// 2. Throw it away if there's no real movement.
+	if (!realMove)
+	{
+		return false;
+	}
+
+	// 3. Store some values
+	endStopsToCheck = ce;
+
+	// 4. Compute the direction and amount of motion, moved to the positive hyperquadrant
+	Move::Absolute(normalisedDirectionVector, DRIVES);
+	totalDistance = Move::Normalise(normalisedDirectionVector, DRIVES);
+
+	// 5. Compute the maximum acceleration available
+	acceleration = Move::VectorBoxIntersection(normalisedDirectionVector, reprap.GetPlatform()->Accelerations(), DRIVES);
+
+	// Set the speed to the smaller of the requested and maximum speed.
+	// Note: this assumes that the requested feedrate is the Cartesian diagonal of all the drive moves (as in the RRP 0.78 release).
+	// This will cause the actual feedrate to be slightly lower than requested if an XYZ move includes extrusion, however the effect is only a few percent.
+	requestedSpeed = min<float>(nextMove[DRIVES], Move::VectorBoxIntersection(normalisedDirectionVector, reprap.GetPlatform()->MaxFeedrates(), DRIVES));
+
+	for (size_t i = 0; i < DRIVES; ++i)
+	{
+		DriveMovement& dm = ddm[i];
+		if (dm.moving)
+		{
+			dm.nextStep = 0;
+			dm.dv = normalisedDirectionVector[i];
 			dm.stepsPerMm = reprap.GetPlatform()->DriveStepsPerUnit(i) * dm.dv;
 			dm.twoCsquaredTimesMmPerStepDivA = (uint64_t)(((float)stepClockRate * (float)stepClockRate)/(dm.stepsPerMm * acceleration)) * 2;
 			dm.elasticComp = reprap.GetPlatform()->GetElasticComp(i) * dm.dv;
 		}
 	}
 
-	startPinned = false;
-
 	// 2. Calculate the accelerate and decelerate distances and the top speed
-	float decelDistance;
-	if (limitDda == nullptr)
+	if (prev->state != provisional)
 	{
-		// There is no previous move, so this move must start at zero speed, and for now it must also end at zero speed.
+		// There is no previous move that we can adjust, so this move must start at zero speed, and for now it must also end at zero speed.
 		// Calculate the distance required to accelerate to the requested speed: v^2 = u^2 + 2as
 		startSpeed = 0.0;
-		float distanceToReqSpeed = (reqSpeed * reqSpeed)/(2.0 * acceleration);
+		float distanceToReqSpeed = (requestedSpeed * requestedSpeed)/(2.0 * acceleration);
 		if (distanceToReqSpeed * 2 >= totalDistance)
 		{
 			// we can't reach the requested speed, so just accelerate and decelerate
@@ -117,7 +134,6 @@ void DDA::Init(
 			accelDistance = decelDistance = distanceToReqSpeed;
 			topSpeed = requestedSpeed;
 		}
-		startPinned = true;			// can't adjust the starting speed of this move
 	}
 	else
 	{
@@ -128,12 +144,7 @@ void DDA::Init(
 		float idealStartSpeed = min<float>(maxStartSpeed, requestedSpeed);
 
 		// Try to meld this move to the previous move to avoid stop/start
-		startSpeed = prev->AdjustEndSpeed(idealStartSpeed, directionVector);
-		if (startSpeed < idealStartSpeed || startSpeed == requestedSpeed)
-		{
-			startPinned = true;
-		}
-
+		startSpeed = prev->AdjustEndSpeed(idealStartSpeed);
 		accelDistance = ((requestedSpeed * requestedSpeed) - (startSpeed * startSpeed))/(2.0 * acceleration);
 		decelDistance = (requestedSpeed * requestedSpeed)/(2.0 * acceleration);		// end speed is zero
 		if (accelDistance + decelDistance >= totalDistance)
@@ -153,13 +164,8 @@ void DDA::Init(
 		}
 	}
 
-	// Now convert the accelerate/decelerate distances to times
-	decelStartDistance = totalDistance - decelDistance;
-	accelStopTime = sqrt((2.0 * accelDistance)/acceleration);
-	decelStartTime = accelStopTime + (decelStartDistance - accelDistance)/topSpeed;
-	totalTime = decelStartTime + sqrt((2.0 * decelDistance)/acceleration);
-
 	state = provisional;
+	return true;
 }
 
 float DDA::MachineToEndPoint(size_t drive) const
@@ -167,9 +173,134 @@ float DDA::MachineToEndPoint(size_t drive) const
 	return ((float)(endPoint[drive]))/reprap.GetPlatform()->DriveStepsPerUnit(drive);
 }
 
-float DDA::AdjustEndSpeed(float idealStartSpeed, const float *directionVector)
+// Adjust the end speed of this move, if we can.
+// Prior to calling this, the caller has checked that its state is 'provisional'.
+float DDA::AdjustEndSpeed(float targetStartSpeed)
+//pre(state == provisional)
 {
-	return 0.0;		//TODO implement this
+//	debugPrintf("Adjusting, %f\n", targetStartSpeed);
+	// Decide what speed we would really like to start at. There are several possibilities:
+	// 1. If the top speed is already the requested speed, use the requested speed.
+	// 2. Else if this is a deceleration-only move and the previous move is not frozen, we may be able to increase the start speed,
+	//    so use the requested speed again.
+	// 3. Else the start speed must be pinned, so use the lower of the maximum speed we can accelerate to and the requested speed.
+	bool canAdjustPreviousMove = (decelDistance == totalDistance && prev->state == provisional);
+	float targetEndSpeed =
+			(topSpeed == requestedSpeed || canAdjustPreviousMove)
+			? requestedSpeed
+			: min<float>(sqrt((startSpeed * startSpeed) + (2 * acceleration * totalDistance)), requestedSpeed);
+
+	// We may need 2 goes at this
+	bool repeat;
+	do
+	{
+//		debugPrintf(" Repeat\n");
+		// We may have to make multiple passes, because reducing one of the speeds may solve some problems but actually make matters worse another axis.
+		bool limited;
+		do
+		{
+//			debugPrintf("  Pass, start=%f end=%f\n", targetStartSpeed, targetEndSpeed);
+			limited = false;
+			for (size_t drive = 0; drive < DRIVES; ++drive)
+			{
+				DriveMovement& thisMoveDm = ddm[drive];
+				DriveMovement& nextMoveDm = next->ddm[drive];
+				float thisMoveSpeed = thisMoveDm.GetDriveSpeed(targetEndSpeed);
+				float nextMoveSpeed = nextMoveDm.GetDriveSpeed(targetStartSpeed);
+				float idealDeltaV = fabs(thisMoveSpeed - nextMoveSpeed);
+				float maxDeltaV = reprap.GetPlatform()->InstantDv(drive);
+				if (idealDeltaV > maxDeltaV + 0.01)					// the 0.01 is to allow for rounding error
+				{
+					// This drive can't change speed fast enough, so reduce the start and/or end speeds
+					if (thisMoveDm.direction == nextMoveDm.direction)
+					{
+						// Drives moving in the same direction, so we must reduce the faster one
+						if (fabs(thisMoveSpeed) > fabs(nextMoveSpeed))
+						{
+							targetEndSpeed = (fabs(nextMoveSpeed) + maxDeltaV)/thisMoveDm.dv;
+						}
+						else
+						{
+							targetStartSpeed = (fabs(thisMoveSpeed) + maxDeltaV)/nextMoveDm.dv;
+						}
+					}
+					else if (fabs(thisMoveSpeed * 2 < maxDeltaV))
+					{
+						targetStartSpeed = (maxDeltaV - fabs(thisMoveSpeed))/nextMoveDm.dv;
+					}
+					else if (fabs(nextMoveSpeed * 2 < maxDeltaV))
+					{
+						targetEndSpeed = (maxDeltaV - fabs(nextMoveSpeed))/thisMoveDm.dv;
+					}
+					else
+					{
+						targetStartSpeed = maxDeltaV/(2 * nextMoveDm.dv);
+						targetEndSpeed = maxDeltaV/(2 * thisMoveDm.dv);
+					}
+					limited = true;
+				}
+			}
+		} while (limited);
+
+		repeat = false;
+
+		// If we made the assumption that we can increase the end speed of the previous move, see whether we need to do so
+		if (canAdjustPreviousMove)
+		{
+			float maxStartSpeed = min<float>(sqrt((targetEndSpeed * targetEndSpeed) + (2 * acceleration * totalDistance)), requestedSpeed);
+//			debugPrintf("Recursion start\n");
+			startSpeed = prev->AdjustEndSpeed(maxStartSpeed);		// TODO eliminate this recursive call!
+//			debugPrintf("Recursion end\n");
+			float maxEndSpeed = sqrt((startSpeed * startSpeed) + (2 * acceleration * totalDistance));
+			if (maxEndSpeed < targetEndSpeed)
+			{
+				// Oh dear, we were too optimistic! Have another go.
+				targetEndSpeed = maxEndSpeed;
+				canAdjustPreviousMove = false;						// we have already adjusted it as much as we can
+				repeat = true;
+			}
+		}
+	} while (repeat);
+
+	// Recalculate this move
+	accelDistance = ((requestedSpeed * requestedSpeed) - (startSpeed * startSpeed))/(2.0 * acceleration);
+	decelDistance = ((requestedSpeed * requestedSpeed) - (targetEndSpeed * targetEndSpeed))/(2.0 * acceleration);
+	if (accelDistance + decelDistance >= totalDistance)
+	{
+		// It's an accelerate-decelerate move. If V is the peak speed, then (V^2 - u^2)/2a + (V^2 - v^2)/2a = distance.
+		// So (2V^2 - u^2 - v^2)/2a = distance
+		// So V^2 = a * distance - 0.5(u^2 + v^2)
+		float vsquared = (acceleration * totalDistance) - 0.5 * ((startSpeed * startSpeed) + (targetEndSpeed * targetEndSpeed));
+		// Calculate accelerate distance from: V^2 = u^2 + 2as
+		if (vsquared >= 0.0)
+		{
+			accelDistance = (vsquared - (startSpeed * startSpeed))/(2.0 * acceleration);
+			decelDistance = totalDistance - accelDistance;
+			topSpeed = sqrt(vsquared);
+		}
+		else if (startSpeed < targetEndSpeed)
+		{
+			// This would ideally never happen, but might because of rounding errors
+			accelDistance = totalDistance;
+			decelDistance = 0.0;
+			topSpeed = targetEndSpeed;
+		}
+		else
+		{
+			// This would ideally never happen, but might because of rounding errors
+			accelDistance = 0.0;
+			decelDistance = totalDistance;
+			topSpeed = startSpeed;
+		}
+
+	}
+	else
+	{
+		topSpeed = requestedSpeed;
+	}
+
+//	debugPrintf("Complete, %f\n", targetStartSpeed);
+	return targetStartSpeed;
 }
 
 // Force an end point
@@ -190,6 +321,12 @@ void DDA::SetDriveCoordinate(int32_t a, size_t drive)
 // Prepare this DDA for execution
 void DDA::Prepare()
 {
+	// Now convert the accelerate/decelerate distances to times
+	float decelStartDistance = totalDistance - decelDistance;
+	accelStopTime = sqrt((2.0 * accelDistance)/acceleration);
+	decelStartTime = accelStopTime + (decelStartDistance - accelDistance)/topSpeed;
+	totalTime = decelStartTime + sqrt((2.0 * decelDistance)/acceleration);
+
 	startSpeedTimesCdivA = (uint32_t)((startSpeed * (float)stepClockRate)/acceleration);
 	startSpeedTimesCdivAsquared = (uint64_t)startSpeedTimesCdivA * startSpeedTimesCdivA;
 	uint32_t topSpeedTimesCdivA = (uint32_t)((topSpeed * (float)stepClockRate)/acceleration);
@@ -199,6 +336,7 @@ void DDA::Prepare()
 		((uint64_t)topSpeedTimesCdivA * topSpeedTimesCdivA) + ((uint64_t)(((float)stepClockRate * (float)stepClockRate * decelStartDistance)/acceleration) * 2);
 	uint32_t accelClocks = (uint32_t)(accelStopTime * (float)stepClockRate);
 	accelClocksMinusAccelDistanceTimesCdivTopSpeed = accelClocks - (uint32_t)((accelDistance * (float)stepClockRate)/topSpeed);
+	timeNeeded = (uint32_t)(totalTime * (float)stepClockRate);
 
 	firstStepTime = NoStepTime;
 	for (size_t i = 0; i < DRIVES; ++i)
@@ -217,20 +355,14 @@ void DDA::Prepare()
 		}
 	}
 
-	state = frozen;
+//	DebugPrint();
+	state = frozen;					// must do this last so that the ISR doesn't start executing it before we have finished setting it up
 }
 
 // Start executing the move, returning true if Step() needs to be called immediately.
 bool DDA::Start(uint32_t tim)
+//pre(state == frozen)
 {
-	if (state == provisional)
-	{
-		// This should preferably not happen, because if Start() is called from the step interrupt,
-		// then calling Prepare() may take too long and the next steps may be late.
-		// Also, method Spin() might be trying to update this DDA.
-		Prepare();
-	}
-
 	moveStartTime = tim;
 	moveCompletedTime = 0;
 	state = executing;
@@ -371,11 +503,35 @@ if (numReps > maxReps) maxReps = numReps;
 	return false;
 }
 
+// This is called when we abort a move because we have hit and endstop.
+// It adjusts the end points of the current move to account for how far through the move we got.
+// The end point coordinate of the axis whose endstop we hit generally doesn't matter, because we will reset it,
+// however if we are using compensation then the other coordinates do matter.
+void DDA::MoveAborted()
+{
+	for (size_t drive = 0; drive < AXES; ++drive)
+	{
+		const DriveMovement& dm = ddm[drive];
+		if (dm.moving)
+		{
+			int32_t stepsLeft = dm.totalSteps - dm.nextStep;
+			if (dm.direction)
+			{
+				endPoint[drive] += stepsLeft;			// we were going backwards
+			}
+			else
+			{
+				endPoint[drive] -= stepsLeft;			// we were going forwards
+			}
+		}
+	}
+}
+
 // Fast 64-bit integer square root function
 /* static */ uint32_t DDA::isqrt(uint64_t num)
 {
-irqflags_t flags = cpu_irq_save();
-uint32_t t2 = Platform::GetInterruptClocks();
+//irqflags_t flags = cpu_irq_save();
+//uint32_t t2 = Platform::GetInterruptClocks();
 	uint32_t numHigh = (uint32_t)(num >> 32);
 	if (numHigh != 0)
 	{
@@ -419,8 +575,8 @@ uint32_t t2 = Platform::GetInterruptClocks();
 
 		uint32_t rslt = (uint32_t)(res >> 1);
 
-uint32_t t3 = Platform::GetInterruptClocks() - t2; if (t3 < minCalcTime) minCalcTime = t3; if (t3 > maxCalcTime) maxCalcTime = t3;
-cpu_irq_restore(flags);
+//uint32_t t3 = Platform::GetInterruptClocks() - t2; if (t3 < minCalcTime) minCalcTime = t3; if (t3 > maxCalcTime) maxCalcTime = t3;
+//cpu_irq_restore(flags);
 //uint64_t num3 = (uint64_t)rslt * rslt; if (num3 > num || (num - num3) > 2*rslt) {++sqrtErrors; lastNum = num; lastRes = rslt; }
 		return rslt;
 	}
@@ -449,16 +605,11 @@ cpu_irq_restore(flags);
 
 		res32 >>= 1;
 
-uint32_t t3 = Platform::GetInterruptClocks() - t2; if (t3 < minCalcTime) minCalcTime = t3; if (t3 > maxCalcTime) maxCalcTime = t3;
-cpu_irq_restore(flags);
+//uint32_t t3 = Platform::GetInterruptClocks() - t2; if (t3 < minCalcTime) minCalcTime = t3; if (t3 > maxCalcTime) maxCalcTime = t3;
+//cpu_irq_restore(flags);
 //uint64_t num3 = (uint64_t)res32 * res32; if (num3 > num || (num - num3) > 2*res32) {++sqrtErrors; lastNum = num; lastRes = res32; }
 		return res32;
 	}
-}
-
-void DDA::MoveAborted()
-{
-//TODO implement
 }
 
 // End
