@@ -3184,7 +3184,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
             	for(int8_t drive = AXES; drive < DRIVES; drive++)
             	{
 					reply.catf("%.1f%c", platform->InstantDv(drive) / (distanceScale * secondsToMinutes),
-							(drive < DRIVES - 1) ? ":" : "\n");
+							(drive < DRIVES - 1) ? ':' : '\n');
             	}
         	}
        	}
@@ -3375,7 +3375,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 						platform->MotorCurrent(Z_AXIS));
 				for(int8_t drive = AXES; drive < DRIVES; drive++)
 				{
-					reply.catf("%.1f%c", platform->MotorCurrent(drive), (drive < DRIVES - 1) ? ":" : "\n");
+					reply.catf("%.1f%c", platform->MotorCurrent(drive), (drive < DRIVES - 1) ? ':' : '\n');
 				}
 			}
 		}

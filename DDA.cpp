@@ -195,7 +195,7 @@ float DDA::AdjustEndSpeed(float targetStartSpeed)
 	do
 	{
 //		debugPrintf(" Repeat\n");
-		// We may have to make multiple passes, because reducing one of the speeds may solve some problems but actually make matters worse another axis.
+		// We may have to make multiple passes, because reducing one of the speeds may solve some problems but actually make matters worse on another axis.
 		bool limited;
 		do
 		{
@@ -203,41 +203,52 @@ float DDA::AdjustEndSpeed(float targetStartSpeed)
 			limited = false;
 			for (size_t drive = 0; drive < DRIVES; ++drive)
 			{
-				DriveMovement& thisMoveDm = ddm[drive];
-				DriveMovement& nextMoveDm = next->ddm[drive];
-				float thisMoveSpeed = thisMoveDm.GetDriveSpeed(targetEndSpeed);
-				float nextMoveSpeed = nextMoveDm.GetDriveSpeed(targetStartSpeed);
-				float idealDeltaV = fabs(thisMoveSpeed - nextMoveSpeed);
-				float maxDeltaV = reprap.GetPlatform()->InstantDv(drive);
-				if (idealDeltaV > maxDeltaV + 0.01)					// the 0.01 is to allow for rounding error
+				const DriveMovement& thisMoveDm = ddm[drive];
+				const DriveMovement& nextMoveDm = next->ddm[drive];
+				if (thisMoveDm.moving || nextMoveDm.moving)
 				{
-					// This drive can't change speed fast enough, so reduce the start and/or end speeds
-					if (thisMoveDm.direction == nextMoveDm.direction)
+					float thisMoveSpeed = thisMoveDm.GetDriveSpeed(targetEndSpeed);
+					float nextMoveSpeed = nextMoveDm.GetDriveSpeed(targetStartSpeed);
+					float idealDeltaV = fabsf(thisMoveSpeed - nextMoveSpeed);
+					float maxDeltaV = reprap.GetPlatform()->InstantDv(drive);
+					if (idealDeltaV > maxDeltaV)
 					{
-						// Drives moving in the same direction, so we must reduce the faster one
-						if (fabs(thisMoveSpeed) > fabs(nextMoveSpeed))
+						// This drive can't change speed fast enough, so reduce the start and/or end speeds
+						// This algorithm sometimes converges very slowly, requiring many passes.
+						// To ensure it converges at all, and to speed up convergence, we over-adjust the speed to achieve an even lower deltaV.
+						maxDeltaV *= 0.8;
+						if (thisMoveDm.direction == nextMoveDm.direction)
 						{
-							targetEndSpeed = (fabs(nextMoveSpeed) + maxDeltaV)/thisMoveDm.dv;
+							// Drives moving in the same direction, so we must reduce the faster one
+							if (fabsf(thisMoveSpeed) > fabsf(nextMoveSpeed))
+							{
+								targetEndSpeed = (fabsf(nextMoveSpeed) + maxDeltaV)/thisMoveDm.dv;
+							}
+							else
+							{
+								targetStartSpeed = (fabsf(thisMoveSpeed) + maxDeltaV)/nextMoveDm.dv;
+							}
+						}
+						else if (fabsf(thisMoveSpeed) * 2 < maxDeltaV)
+						{
+							targetStartSpeed = (maxDeltaV - fabsf(thisMoveSpeed))/nextMoveDm.dv;
+						}
+						else if (fabsf(nextMoveSpeed) * 2 < maxDeltaV)
+						{
+							targetEndSpeed = (maxDeltaV - fabsf(nextMoveSpeed))/thisMoveDm.dv;
 						}
 						else
 						{
-							targetStartSpeed = (fabs(thisMoveSpeed) + maxDeltaV)/nextMoveDm.dv;
+							targetStartSpeed = maxDeltaV/(2 * nextMoveDm.dv);
+							targetEndSpeed = maxDeltaV/(2 * thisMoveDm.dv);
+						}
+						limited = true;
+						// Most conflicts are between X and Y. So if we just did Y, start another pass immediately to save time.
+						if (drive == 1)
+						{
+							break;
 						}
 					}
-					else if (fabs(thisMoveSpeed * 2 < maxDeltaV))
-					{
-						targetStartSpeed = (maxDeltaV - fabs(thisMoveSpeed))/nextMoveDm.dv;
-					}
-					else if (fabs(nextMoveSpeed * 2 < maxDeltaV))
-					{
-						targetEndSpeed = (maxDeltaV - fabs(nextMoveSpeed))/thisMoveDm.dv;
-					}
-					else
-					{
-						targetStartSpeed = maxDeltaV/(2 * nextMoveDm.dv);
-						targetEndSpeed = maxDeltaV/(2 * thisMoveDm.dv);
-					}
-					limited = true;
 				}
 			}
 		} while (limited);
@@ -248,9 +259,9 @@ float DDA::AdjustEndSpeed(float targetStartSpeed)
 		if (canAdjustPreviousMove)
 		{
 			float maxStartSpeed = min<float>(sqrt((targetEndSpeed * targetEndSpeed) + (2 * acceleration * totalDistance)), requestedSpeed);
-//			debugPrintf("Recursion start\n");
-			startSpeed = prev->AdjustEndSpeed(maxStartSpeed);		// TODO eliminate this recursive call!
-//			debugPrintf("Recursion end\n");
+			debugPrintf("Recursion start\n");
+			startSpeed = prev->AdjustEndSpeed(maxStartSpeed);		// TODO eliminate this recursive call! (but it's very rare)
+			debugPrintf("Recursion end\n");
 			float maxEndSpeed = sqrt((startSpeed * startSpeed) + (2 * acceleration * totalDistance));
 			if (maxEndSpeed < targetEndSpeed)
 			{
@@ -346,7 +357,7 @@ void DDA::Prepare()
 		{
 			dm.accelStopStep = (uint32_t)(accelDistance * dm.stepsPerMm) + 1;
 			dm.decelStartStep = (uint32_t)(decelStartDistance * dm.stepsPerMm) + 1;
-			dm.mmPerStepTimesCdivtopSpeed = (uint32_t)(((float)stepClockRate * (float)mmPerStepFactor)/(dm.stepsPerMm * topSpeed));
+			dm.mmPerStepTimesCdivtopSpeed = (uint32_t)(((float)stepClockRate * mmPerStepFactor)/(dm.stepsPerMm * topSpeed));
 			uint32_t st = CalcNextStepTime(dm);
 			if (st < firstStepTime)
 			{
@@ -437,6 +448,40 @@ if (numReps > maxReps) maxReps = numReps;
 			DriveMovement& dm = ddm[drive];
 			if (dm.moving)
 			{
+				// Hit anything?
+				if ((endStopsToCheck & (1 << drive)) != 0)
+				{
+					switch(reprap.GetPlatform()->Stopped(drive))
+					{
+					case lowHit:
+						reprap.GetMove()->HitLowStop(drive, this);
+						moveCompletedTime = now + settleClocks;
+						state = completed;
+						break;
+
+					case highHit:
+						reprap.GetMove()->HitHighStop(drive, this);
+						moveCompletedTime = now + settleClocks;
+						state = completed;
+						break;
+
+					case lowNear:
+						{
+							// This code assumes that only one endstop is enabled at a time, which is the usual case.
+							// Also, at present only the Z axis can give a LowNear indication anyway.
+							float instantDv = reprap.GetPlatform()->InstantDv(drive);
+							if (instantDv < topSpeed)
+							{
+								ReduceHomingSpeed(instantDv, drive);
+							}
+						}
+						break;
+
+					default:
+						break;
+					}
+				}
+
 				uint32_t st0 = dm.nextStepTime;
 				if (now + minInterruptInterval >= st0)
 				{
@@ -461,30 +506,6 @@ if (numReps > maxReps) maxReps = numReps;
 				else if (st0 < nextInterruptTime)
 				{
 					nextInterruptTime = st0;
-				}
-			}
-
-			// Hit anything?
-			if ((endStopsToCheck & (1 << drive)) != 0)
-			{
-				switch(reprap.GetPlatform()->Stopped(drive))
-				{
-				case lowHit:
-					reprap.GetMove()->HitLowStop(drive, this);
-					moveCompletedTime = now + settleClocks;
-					state = completed;
-					break;
-				case highHit:
-					reprap.GetMove()->HitHighStop(drive, this);
-					moveCompletedTime = now + settleClocks;
-					state = completed;
-					break;
-				case lowNear:
-					//TODO implement this
-//					velocity = instantDv;		// slow down because we are getting close
-					break;
-				default:
-					break;
 				}
 			}
 		}
@@ -522,6 +543,32 @@ void DDA::MoveAborted()
 			else
 			{
 				endPoint[drive] -= stepsLeft;			// we were going forwards
+			}
+		}
+	}
+}
+
+// Reduce the speed of this move to the indicated speed.
+// 'drive' is the drive whose near-endstop we hit, so it should be the one with the major movement.
+// This is called from the ISR, so interrupts are disabled and nothing else can mess with us.
+// As this is only called for homing moves and with very low speeds, we assume that we don't need acceleration or deceleration phases.
+void DDA::ReduceHomingSpeed(float newSpeed, size_t endstopDrive)
+{
+	topSpeed = newSpeed;
+	for (size_t drive = 0; drive < DRIVES; ++drive)
+	{
+		DriveMovement& dm = ddm[drive];
+		if (dm.moving)
+		{
+			// Force the linear motion phase
+			dm.decelStartStep = dm.totalSteps + 1;
+			dm.accelStopStep = 0;
+
+			// Adjust the speed
+			dm.mmPerStepTimesCdivtopSpeed = (uint32_t)(((float)stepClockRate * mmPerStepFactor)/(dm.stepsPerMm * newSpeed));
+			if (drive == endstopDrive)
+			{
+				accelClocksMinusAccelDistanceTimesCdivTopSpeed = dm.nextStepTime - (uint32_t)(((uint64_t)dm.mmPerStepTimesCdivtopSpeed * dm.nextStep)/mmPerStepFactor);
 			}
 		}
 	}

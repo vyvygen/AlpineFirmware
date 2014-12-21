@@ -226,7 +226,7 @@ void Move::Absolute(float v[], int8_t dimensions)
 {
 	for(size_t d = 0; d < dimensions; d++)
 	{
-		v[d] = fabs(v[d]);
+		v[d] = fabsf(v[d]);
 	}
 }
 

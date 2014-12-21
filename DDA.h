@@ -108,6 +108,7 @@ private:
 
 	float AdjustEndSpeed(float idealStartSpeed);					// adjust the end speed to match the following move
 	uint32_t CalcNextStepTime(DriveMovement& dm);
+	void ReduceHomingSpeed(float newSpeed, size_t endstopDrive);
 
 	DDA* next;								// The next one in the ring
 	DDA *prev;								// The previous one in the ring
