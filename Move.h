@@ -10,8 +10,7 @@
 
 #include "DDA.h"
 
-const unsigned int DdaRingLength = 20;
-const uint32_t freezeTime = 20;
+const unsigned int DdaRingLength = 16;
 
 enum PointCoordinateSet
 {
@@ -78,6 +77,8 @@ public:
     const float *GetDeltaEndstopAdjustments() const;
     void SetDeltaEndstopAdjustments(float x, float y, float z);
     bool StartNextMove(uint32_t startTime);				// start the next move, returning true if Step() needs to be called immediately
+
+    void PrintCurrentDda() const;						// For debugging
 
 private:
 

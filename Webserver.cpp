@@ -246,7 +246,7 @@ void Webserver::Spin()
 			}
 		}
 
-		platform->ClassReport("Webserver", longWait);
+		platform->ClassReport("Webserver", longWait, moduleWebserver);
 	}
 }
 
@@ -685,7 +685,7 @@ void ProtocolInterpreter::FinishUpload(uint32_t file_length)
 // This is overridden in class HttpInterpreter
 bool ProtocolInterpreter::DebugEnabled() const
 {
-	return reprap.Debug();
+	return reprap.Debug() & (1 << moduleWebserver);
 }
 
 //********************************************************************************************
@@ -697,7 +697,7 @@ bool ProtocolInterpreter::DebugEnabled() const
 
 
 Webserver::HttpInterpreter::HttpInterpreter(Platform *p, Webserver *ws)
-	: ProtocolInterpreter(p, ws), state(doingCommandWord), webDebug(false)
+	: ProtocolInterpreter(p, ws), state(doingCommandWord)
 {
 }
 
@@ -790,7 +790,7 @@ void Webserver::HttpInterpreter::SendJsonResponse(const char* command)
 	if (found)
 	{
 		jsonResponseBuffer[ARRAY_UPB(jsonResponseBuffer)] = 0;
-		if (webDebug)
+		if (reprap.Debug() & (1 << moduleWebserver))
 		{
 			platform->Message(HOST_MESSAGE, "JSON response: %s queued\n", jsonResponseBuffer);
 		}
@@ -1243,7 +1243,7 @@ bool Webserver::HttpInterpreter::CharFromClient(char c)
 // Return true if the message is complete, false if we want to continue receiving data (i.e. postdata)
 bool Webserver::HttpInterpreter::ProcessMessage()
 {
-    if(webDebug)
+    if(reprap.Debug() & (1 << moduleWebserver))
     {
     	platform->Message(HOST_MESSAGE, "HTTP request:");
     	for (unsigned int i = 0; i < numCommandWords; ++i)
@@ -2439,9 +2439,4 @@ unsigned int Webserver::FindFilamentUsed(const char* buf, size_t len, float *fil
 	return filamentsFound;
 }
 
-
-void Webserver::WebDebug(bool wdb)
-{
-	httpInterpreter->SetDebug(wdb);
-}
-
+// End

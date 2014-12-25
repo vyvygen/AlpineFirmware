@@ -106,6 +106,9 @@ extern StringRef scratchString;
 #include "Tool.h"
 #include "Reprap.h"
 
+// Module numbers, used for diagnostics
+const uint8_t modulePlatform = 2, moduleNetwork = 3, moduleWebserver = 4, moduleGcodes = 5, moduleMove = 6, moduleHeat = 7;
+
 // std::min and std::max don't seem to work with this variant of gcc, so define our own ones here
 // We use these only with primitive types, so pass them directly instead of by const reference
 #undef min

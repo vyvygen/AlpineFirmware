@@ -100,6 +100,7 @@ void Move::Spin()
 	// See if we can add another move to the ring
 	if (!addNoMoreMoves && ddaRingAddPointer->GetState() == DDA::empty)
 	{
+		ddaRingAddPointer->PrintIfHasStepError();
 		// If there's a G Code move available, add it to the DDA ring for processing.
 		float nextMove[DRIVES + 1];
 		EndstopChecks endStopsToCheck;
@@ -148,7 +149,7 @@ void Move::Spin()
 		}
 
 		// If the number of prepared moves will execute in less than the minimum time, prepare another move
-		while (st == DDA::provisional && preparedTime < (int32_t)(DDA::stepClockRate/2))		// prepare moves half a second ahead of when they will be needed
+		while (st == DDA::provisional && preparedTime < (int32_t)(DDA::stepClockRate/8))		// prepare moves one eighth of a second ahead of when they will be needed
 		{
 			cdda->Prepare();
 			preparedTime += cdda->GetTimeLeft();
@@ -157,7 +158,7 @@ void Move::Spin()
 		}
 	}
 
-	reprap.GetPlatform()->ClassReport("Move", longWait);
+	reprap.GetPlatform()->ClassReport("Move", longWait, moduleMove);
 }
 
 // Take a unit positive-hyperquadrant vector, and return the factor needed to obtain
@@ -801,6 +802,16 @@ int Move::NumberOfXYProbePoints() const
 		}
 	}
 	return NUMBER_OF_PROBE_POINTS;
+}
+
+// For debugging
+void Move::PrintCurrentDda() const
+{
+	if (currentDda != nullptr)
+	{
+		currentDda->DebugPrint();
+		reprap.GetPlatform()->GetLine()->Flush();
+	}
 }
 
 // End

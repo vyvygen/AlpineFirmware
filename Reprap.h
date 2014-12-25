@@ -35,8 +35,8 @@ class RepRap
     void Interrupt();
     void Diagnostics();
     void Timing();
-    bool Debug() const;
-    void SetDebug(bool d);
+    uint16_t Debug() const;
+    void SetDebug(uint16_t d);
     void AddTool(Tool* t);
     void SelectTool(int toolNumber);
     void StandbyTool(int toolNumber);
@@ -81,8 +81,8 @@ class RepRap
     Tool* toolList;
     Tool* currentTool;
     uint16_t ticksInSpinState;
-    uint8_t spinState;
-    bool debug;
+    uint8_t currentModule;
+    uint16_t debug;
     float fastLoop, slowLoop;
     float lastTime;
     bool stopped;
@@ -106,7 +106,7 @@ inline Heat* RepRap::GetHeat() const { return heat; }
 inline GCodes* RepRap::GetGCodes() const { return gCodes; }
 inline Network* RepRap::GetNetwork() const { return network; }
 inline Webserver* RepRap::GetWebserver() const { return webserver; }
-inline bool RepRap::Debug() const { return debug; }
+inline uint16_t RepRap::Debug() const { return debug; }
 inline Tool* RepRap::GetCurrentTool() { return currentTool; }
 inline uint16_t RepRap::GetExtrudersInUse() const { return activeExtruders; }
 inline uint16_t RepRap::GetHeatersInUse() const { return activeHeaters; }
@@ -151,7 +151,7 @@ inline void RepRap::ClearTemperatureFault(int8_t wasDudHeater)
 	}
 }
 
-inline void RepRap::SetDebug(bool d)
+inline void RepRap::SetDebug(uint16_t d)
 {
 	debug = d;
 	if(debug)

@@ -163,7 +163,7 @@ RepRap reprap;
 
 // Do nothing more in the constructor; put what you want in RepRap:Init()
 
-RepRap::RepRap() : active(false), debug(false), stopped(false), spinState(0), ticksInSpinState(0), resetting(false), fileInfoDetected(false), printStartTime(0.0)
+RepRap::RepRap() : active(false), debug(0), stopped(false), currentModule(0), ticksInSpinState(0), resetting(false), fileInfoDetected(false), printStartTime(0.0)
 {
   platform = new Platform();
   network = new Network();
@@ -176,7 +176,7 @@ RepRap::RepRap() : active(false), debug(false), stopped(false), spinState(0), ti
 
 void RepRap::Init()
 {
-  debug = false;
+  debug = 0;
   activeExtruders = 1;		// we always report at least 1 extruder to the web interface
   activeHeaters = 2;		// we always report the bed heater + 1 extruder heater to the web interface
 
@@ -256,31 +256,31 @@ void RepRap::Spin()
 	if(!active)
 		return;
 
-	spinState = 1;
+	currentModule = modulePlatform;
 	ticksInSpinState = 0;
 	platform->Spin();
 
-	++spinState;
+	currentModule = moduleNetwork;
 	ticksInSpinState = 0;
 	network->Spin();
 
-	++spinState;
+	currentModule = moduleWebserver;
 	ticksInSpinState = 0;
 	webserver->Spin();
 
-	++spinState;
+	currentModule = moduleGcodes;
 	ticksInSpinState = 0;
 	gCodes->Spin();
 
-	++spinState;
+	currentModule = moduleMove;
 	ticksInSpinState = 0;
 	move->Spin();
 
-	++spinState;
+	currentModule = moduleHeat;
 	ticksInSpinState = 0;
 	heat->Spin();
 
-	spinState = 0;
+	currentModule = 0;
 	ticksInSpinState = 0;
 
 	// Keep track of the loop time
@@ -484,7 +484,8 @@ void RepRap::Tick()
 					// We can't set motor currents to 0 here because that requires interrupts to be working, and we are in an ISR
 				}
 
-				platform->SoftwareReset(SoftwareResetReason::stuckInSpin + spinState);
+				move->PrintCurrentDda();
+				platform->SoftwareReset(SoftwareResetReason::stuckInSpin + currentModule);
 			}
 		}
 	}

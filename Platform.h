@@ -281,6 +281,7 @@ public:
 	int Read(char& b);
 	void Write(char b, bool block = false);
 	void Write(const char* s, bool block = false);
+	void Flush();
 
 friend class Platform;
 friend class RepRap;
@@ -554,7 +555,7 @@ public:
   void SetEmulating(Compatibility c);
   void Diagnostics();
   void DiagnosticTest(int d);
-  void ClassReport(const char* className, float &lastTime);  // Called on return to check everything's live.
+  void ClassReport(const char* className, float &lastTime, uint8_t module);  // Called on return to check everything's live.
   void RecordError(ErrorCode ec) { errorCodeBits |= ec; }
   void SoftwareReset(uint16_t reason);
   void SetAtxPower(bool on);
@@ -618,9 +619,10 @@ public:
   float MaxFeedrate(int8_t drive) const;
   const float* MaxFeedrates() const;
   void SetMaxFeedrate(int8_t drive, float value);
-  float InstantDv(size_t drive) const;
+  float ConfiguredInstantDv(size_t drive) const;
+  float ActualInstantDv(size_t drive) const;
   void SetInstantDv(size_t drive, float value);
-  const float* InstantDvs() const;
+//  const float* InstantDvs() const;
   float HomeFeedRate(int8_t axis) const;
   void SetHomeFeedRate(int8_t axis, float value);
   EndStopHit Stopped(int8_t drive);
@@ -991,7 +993,7 @@ inline float Platform::MaxFeedrate(int8_t drive) const
 
 inline const float* Platform::MaxFeedrates() const
 {
-  return maxFeedrates;
+	return maxFeedrates;
 }
 
 inline void Platform::SetMaxFeedrate(int8_t drive, float value)
@@ -999,9 +1001,9 @@ inline void Platform::SetMaxFeedrate(int8_t drive, float value)
 	maxFeedrates[drive] = value;
 }
 
-inline float Platform::InstantDv(size_t drive) const
+inline float Platform::ConfiguredInstantDv(size_t drive) const
 {
-  return instantDvs[drive]; 
+	return instantDvs[drive];
 }
 
 inline void Platform::SetInstantDv(size_t drive, float value)
@@ -1015,15 +1017,10 @@ inline int8_t Platform::SlowestDrive() const
 	return slowestDrive;
 }
 
+#if 0	// not used
 inline const float* Platform::InstantDvs() const
 {
-  return instantDvs;
-}
-
-#if 0	// not used
-inline bool Platform::HighStopButNotLow(int8_t axis) const
-{
-	return (lowStopPins[axis] < 0) && (highStopPins[axis] >= 0);
+	return instantDvs;
 }
 #endif
 

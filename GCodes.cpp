@@ -163,7 +163,7 @@ void GCodes::Spin()
 			}
 			++i;
 		} while (i < 16 && webserver->GCodeAvailable());
-		platform->ClassReport("GCodes", longWait);
+		platform->ClassReport("GCodes", longWait, moduleGcodes);
 		return;
 	}
 
@@ -177,7 +177,7 @@ void GCodes::Spin()
 			char b;
 			platform->GetLine()->Read(b);
 			WriteHTMLToFile(b, serialGCode);
-			platform->ClassReport("GCodes", longWait);
+			platform->ClassReport("GCodes", longWait, moduleGcodes);
 			return;
 		}
 
@@ -205,11 +205,13 @@ void GCodes::Spin()
 				}
 				++i;
 			} while (i < 16 && (platform->GetLine()->Status() & byteAvailable));
-			platform->ClassReport("GCodes", longWait);
+			platform->ClassReport("GCodes", longWait, moduleGcodes);
 			return;
 		}
 	}
 
+	// Now run the G-Code buffers. It's important to fill up the G-Code buffers before we do this,
+	// otherwise we wouldn't have a chance to pause/cancel running prints.
 	if (!auxGCode->Active() && (platform->GetAux()->Status() & byteAvailable))
 	{
 		int8_t i = 0;
@@ -224,48 +226,32 @@ void GCodes::Spin()
 			}
 			++i;
 		} while (i < 16 && (platform->GetAux()->Status() & byteAvailable));
-		platform->ClassReport("GCodes", longWait);
-		return;
 	}
-
-	// Now run the G-Code buffers. It's important to fill up the G-Code buffers before we do this,
-	// otherwise we wouldn't have a chance to pause/cancel running prints.
-
-	if (webGCode->Active())
+	else if (webGCode->Active())
 	{
 		// Note: Direct web-printing has been dropped, so it's safe to execute web codes immediately
 		webGCode->SetFinished(ActOnCode(webGCode));
-		platform->ClassReport("GCodes", longWait);
-		return;
 	}
-
-	if (serialGCode->Active())
+	else if (serialGCode->Active())
 	{
 		// We want codes from the serial interface to be queued unless the print has been paused
 		serialGCode->SetFinished(ActOnCode(serialGCode));
-		platform->ClassReport("GCodes", longWait);
-		return;
 	}
-
-	if (auxGCode->Active())
+	else if (auxGCode->Active())
 	{
 		// Same goes for our auxiliary interface
 		auxGCode->SetFinished(ActOnCode(auxGCode));
-		platform->ClassReport("GCodes", longWait);
-		return;
 	}
-
-	if (fileGCode->Active())
+	else if (fileGCode->Active())
 	{
 		fileGCode->SetFinished(ActOnCode(fileGCode));
-		platform->ClassReport("GCodes", longWait);
-		return;
+	}
+	else
+	{
+		DoFilePrint(fileGCode);					// else see if there is anything to print from file
 	}
 
-	// Else see if there is anything to print from file
-	DoFilePrint(fileGCode);
-
-	platform->ClassReport("GCodes", longWait);
+	platform->ClassReport("GCodes", longWait, moduleGcodes);
 }
 
 void GCodes::Diagnostics()
@@ -2427,18 +2413,8 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
     	if(gb->Seen('S'))
     	{
     		int dbv = gb->GetIValue();
-    		if(dbv == WEB_DEBUG_TRUE)
-    		{
-    			reprap.GetWebserver()->WebDebug(true);
-    		}
-    		else if (dbv == WEB_DEBUG_FALSE)
-    		{
-    			reprap.GetWebserver()->WebDebug(false);
-    		}
-    		else
-    		{
-    			reprap.SetDebug(dbv);
-    		}
+    		// For backwards compatibility, if the debug value is 1 then set all debug bits
+   			reprap.SetDebug((dbv == 1) ? 0xFFFF : dbv);
     	}
 		break;
 
@@ -3179,11 +3155,11 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
         	else if(!seen)
         	{
         		reply.printf("Minimum feedrates: X: %.1f, Y: %.1f, Z: %.1f, E: ",
-        				platform->InstantDv(X_AXIS)/(distanceScale * secondsToMinutes), platform->InstantDv(Y_AXIS)/(distanceScale * secondsToMinutes),
-        				platform->InstantDv(Z_AXIS)/(distanceScale * secondsToMinutes));
+        				platform->ConfiguredInstantDv(X_AXIS)/(distanceScale * secondsToMinutes), platform->ConfiguredInstantDv(Y_AXIS)/(distanceScale * secondsToMinutes),
+        				platform->ConfiguredInstantDv(Z_AXIS)/(distanceScale * secondsToMinutes));
             	for(int8_t drive = AXES; drive < DRIVES; drive++)
             	{
-					reply.catf("%.1f%c", platform->InstantDv(drive) / (distanceScale * secondsToMinutes),
+					reply.catf("%.1f%c", platform->ConfiguredInstantDv(drive) / (distanceScale * secondsToMinutes),
 							(drive < DRIVES - 1) ? ':' : '\n');
             	}
         	}
@@ -3580,7 +3556,7 @@ bool GCodeBuffer::Put(char c)
 	{
 		gcodeBuffer[gcodePointer] = 0;
 		Init();
-		if (reprap.Debug() && gcodeBuffer[0] && !writingFileDirectory) // Don't bother with blank/comment lines
+		if ((reprap.Debug() & (1 << moduleGcodes)) && gcodeBuffer[0] && !writingFileDirectory) // Don't bother with blank/comment lines
 		{
 			platform->Message(HOST_MESSAGE, "%s%s\n", identity, gcodeBuffer);
 		}

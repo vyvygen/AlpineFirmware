@@ -141,7 +141,6 @@ class Webserver
 
     void ConnectionLost(const ConnectionState *cs);
     void ConnectionError();
-    void WebDebug(bool wdb);
     const StringRef& GetGcodeReply() const { return gcodeReply; }
     unsigned int GetReplySeq() const { return seq; }
     unsigned int GetGcodeBufferSpace() const;
@@ -165,8 +164,6 @@ class Webserver
 
 			bool CharFromClient(const char c);
 			void ResetState();
-			virtual bool DebugEnabled() /*override*/ const { return webDebug; }
-			void SetDebug(bool b) { webDebug = b; }
 
 		private:
 
@@ -228,7 +225,6 @@ class Webserver
 
 			// Buffers to hold reply
 			char decodeChar;
-		    bool webDebug;
 	};
 	HttpInterpreter *httpInterpreter;
 
