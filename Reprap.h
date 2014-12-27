@@ -35,7 +35,7 @@ class RepRap
     void Interrupt();
     void Diagnostics();
     void Timing();
-    uint16_t Debug() const;
+    bool Debug(uint8_t module) const;
     void SetDebug(uint16_t d);
     void AddTool(Tool* t);
     void SelectTool(int toolNumber);
@@ -106,64 +106,13 @@ inline Heat* RepRap::GetHeat() const { return heat; }
 inline GCodes* RepRap::GetGCodes() const { return gCodes; }
 inline Network* RepRap::GetNetwork() const { return network; }
 inline Webserver* RepRap::GetWebserver() const { return webserver; }
-inline uint16_t RepRap::Debug() const { return debug; }
+inline bool RepRap::Debug(uint8_t module) const { return debug & (1 << module); }
 inline Tool* RepRap::GetCurrentTool() { return currentTool; }
 inline uint16_t RepRap::GetExtrudersInUse() const { return activeExtruders; }
 inline uint16_t RepRap::GetHeatersInUse() const { return activeHeaters; }
 inline bool RepRap::ColdExtrude() const { return coldExtrude; }
 inline void RepRap::AllowColdExtrude() { coldExtrude = true; }
 inline void RepRap::DenyColdExtrude() { coldExtrude = false; }
-
-inline void RepRap::GetExtruderCapabilities(bool canDrive[], const bool directions[]) const
-{
-	for(uint8_t extruder=0; extruder<DRIVES - AXES; extruder++)
-	{
-		canDrive[extruder] = false;
-	}
-
-	Tool *tool = toolList;
-	while (tool)
-	{
-		for(uint8_t driveNum = 0; driveNum < tool->DriveCount(); driveNum++)
-		{
-			const int extruderDrive = tool->Drive(driveNum);
-			canDrive[extruderDrive] = tool->ToolCanDrive(directions[extruderDrive + AXES] == FORWARDS);
-		}
-
-		tool = tool->Next();
-	}
-}
-
-inline void RepRap::FlagTemperatureFault(int8_t dudHeater)
-{
-	if(toolList != NULL)
-	{
-		toolList->FlagTemperatureFault(dudHeater);
-	}
-}
-
-inline void RepRap::ClearTemperatureFault(int8_t wasDudHeater)
-{
-	reprap.GetHeat()->ResetFault(wasDudHeater);
-	if(toolList != NULL)
-	{
-		toolList->ClearTemperatureFault(wasDudHeater);
-	}
-}
-
-inline void RepRap::SetDebug(uint16_t d)
-{
-	debug = d;
-	if(debug)
-	{
-		platform->Message(BOTH_MESSAGE, "Debugging enabled\n");
-	}
-	else
-	{
-		platform->Message(WEB_MESSAGE, "");
-	}
-}
-
 inline void RepRap::Interrupt() { move->Interrupt(); }
 inline bool RepRap::IsStopped() const { return stopped; }
 inline uint16_t RepRap::GetTicksInSpinState() const { return ticksInSpinState; }

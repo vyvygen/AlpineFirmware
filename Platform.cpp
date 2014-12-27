@@ -539,8 +539,6 @@ void Platform::ResetNvData()
 		pp.adcLowOffset = pp.adcHighOffset = 0.0;
 	}
 
-	nvData.resetReason = 0;
-	nvData.neverUsedRam = 0;
 #ifdef DUEFLASHSTORAGE_H
 	nvData.magic = FlashData::magicValue;
 #endif
@@ -549,7 +547,7 @@ void Platform::ResetNvData()
 void Platform::ReadNvData()
 {
 #ifdef DUEFLASHSTORAGE_H
-	DueFlashStorage::read(nvAddress, &nvData, sizeof(nvData));
+	DueFlashStorage::read(FlashData::nvAddress, &nvData, sizeof(nvData));
 	if (nvData.magic != FlashData::magicValue)
 	{
 		// Nonvolatile data has not been initialized since the firmware was last written, so set up default values
@@ -564,7 +562,7 @@ void Platform::ReadNvData()
 void Platform::WriteNvData()
 {
 #ifdef DUEFLASHSTORAGE_H
-	DueFlashStorage::write(nvAddress, &nvData, sizeof(nvData));
+	DueFlashStorage::write(FlashData::nvAddress, &nvData, sizeof(nvData));
 #else
 	Message(BOTH_ERROR_MESSAGE, "Cannot write non-volatile data, because Flash support has been disabled!");
 #endif
@@ -703,14 +701,12 @@ void Platform::SoftwareReset(uint16_t reason)
 		}
 	}
 
-	if (reason != 0)
-	{
-		// zpl-2014-11-03: Here we must ensure that no changed values are saved, so load last-known values first
-		ReadNvData();
-		nvData.resetReason = reason;
-		GetStackUsage(NULL, NULL, &nvData.neverUsedRam);
-		WriteNvData();
-	}
+	// Write the reason for the software reset to flash
+	SoftwareResetData temp;
+	temp.magic = SoftwareResetData::magicValue;
+	temp.resetReason = reason;
+	GetStackUsage(NULL, NULL, &temp.neverUsedRam);
+	DueFlashStorage::write(SoftwareResetData::nvAddress, &temp, sizeof(SoftwareResetData));
 
 	rstc_start_software_reset(RSTC);
 	for(;;) {}
@@ -956,7 +952,15 @@ void Platform::Diagnostics()
 			resetReasons[(REG_RSTC_SR & RSTC_SR_RSTTYP_Msk) >> RSTC_SR_RSTTYP_Pos]);
 
 	// Show the error code stored at the last software reset
-	AppendMessage(BOTH_MESSAGE, "Last software reset code & available RAM: 0x%04x, %u\n", nvData.resetReason, nvData.neverUsedRam);
+	{
+		SoftwareResetData temp;
+		temp.magic = 0;
+		DueFlashStorage::read(SoftwareResetData::nvAddress, &temp, sizeof(SoftwareResetData));
+		if (temp.magic == SoftwareResetData::magicValue)
+		{
+			AppendMessage(BOTH_MESSAGE, "Last software reset code & available RAM: 0x%04x, %u\n", temp.resetReason, temp.neverUsedRam);
+		}
+	}
 
 	// Show the current error codes
 	AppendMessage(BOTH_MESSAGE, "Error status: %u\n", errorCodeBits);
@@ -987,7 +991,7 @@ void Platform::Diagnostics()
 
 #if LWIP_STATS
 	// Normally we should NOT try to display LWIP stats here, because it uses debugPrintf(), which will hang the system is no USB cable is connected.
-	if (reprap.Debug() & (1 << moduleNetwork))
+	if (reprap.Debug(moduleNetwork))
 	{
 		stats_display();
 	}
@@ -1033,7 +1037,7 @@ void Platform::GetStackUsage(size_t* currentStack, size_t* maxStack, size_t* nev
 
 void Platform::ClassReport(const char* className, float &lastTime, uint8_t module)
 {
-	if (reprap.Debug() & (1 << module))
+	if (reprap.Debug(module))
 	{
 		if (Time() - lastTime < LONG_TIME)
 		{

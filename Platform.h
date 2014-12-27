@@ -684,18 +684,27 @@ public:
   
 private:
   
-  // This is the structure used to hold out non-volatile data.
+  // These are the structures used to hold out non-volatile data.
   // The SAM3X doesn't have EEPROM so we save the data to flash. This unfortunately means that it gets cleared
   // every time we reprogram the firmware. So there is no need to cater for writing one version of this
   // struct and reading back another.
 
-  struct FlashData
+  struct SoftwareResetData
   {
-	  static const uint16_t magicValue = 0x59B2;	// value we use to recognise that the flash data has been written
+	  static const uint16_t magicValue = 0x59B2;	// value we use to recognise that all the flash data has been written
+	  static const uint32_t nvAddress = 0;				// address in flash where we store the nonvolatile data
 
 	  uint16_t magic;
 	  uint16_t resetReason;							// this records why we did a software reset, for diagnostic purposes
 	  size_t neverUsedRam;							// the amount of never used RAM at the last abnormal software reset
+  };
+
+  struct FlashData
+  {
+	  static const uint16_t magicValue = 0xA436;	// value we use to recognise that just the reset flash data has been written
+	  static const uint32_t nvAddress = SoftwareResetData::nvAddress + sizeof(struct SoftwareResetData);
+
+	  uint16_t magic;
 
 	  // The remaining data could alternatively be saved to SD card.
 	  // Note however that if we save them as G codes, we need to provide a way of saving IR and ultrasonic G31 parameters separately.
@@ -712,7 +721,6 @@ private:
 	  Compatibility compatibility;
   };
 
-  static const uint32_t nvAddress = 0;				// address in flash where we store the nonvolatile data
   FlashData nvData;
   bool autoSaveEnabled;
 
@@ -760,7 +768,6 @@ private:
   volatile ZProbeAveragingFilter zProbeOnFilter;					// Z probe readings we took with the IR turned on
   volatile ZProbeAveragingFilter zProbeOffFilter;					// Z probe readings we took with the IR turned off
   volatile ThermistorAveragingFilter thermistorFilters[HEATERS];	// bed and extruder thermistor readings
-  //int8_t numMixingDrives;
 
 // AXES
 

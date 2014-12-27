@@ -10,7 +10,7 @@
 
 #include "DDA.h"
 
-const unsigned int DdaRingLength = 16;
+const unsigned int DdaRingLength = 20;
 
 enum PointCoordinateSet
 {

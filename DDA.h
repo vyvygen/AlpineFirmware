@@ -32,11 +32,10 @@ public:
 	// The following only need to be stored per-drive if we are supporting elasticity compensation
 	uint32_t startSpeedTimesCdivA;
 	uint64_t startSpeedTimesCdivAsquared;
-	uint32_t accelClocksMinusAccelDistanceTimesCdivTopSpeed;
+	int32_t accelClocksMinusAccelDistanceTimesCdivTopSpeed;					// this one can be negative
 	uint32_t topSpeedTimesCdivAPlusDecelStartClocks;
-	uint64_t topSpeedTimesCdivAsquaredPlusTwoDecelStartDistanceTimesCsquareddDivA;
-	uint32_t topSpeedTimesCdivAPlusReverseStartClocks;
-	uint64_t twoRevStartDistanceTimesCsquareddDivAMinusTopSpeedTimesCdivAsquared;
+	uint64_t twoDistanceToStopTimesCsquaredDivA;
+	int64_t fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA;		// this one can be negative
 
 	// These values change as the step is executed
 	uint32_t nextStep;							// number of steps already done

@@ -8,37 +8,8 @@ void DueFlashStorage::init() {
   }
 }
 
-byte DueFlashStorage::read(uint32_t address) {
-  return FLASH_START[address];
-}
-
 void DueFlashStorage::read(uint32_t address, void *data, uint32_t dataLength) {
   memcpy(data, FLASH_START+address, dataLength);
-}
-
-bool DueFlashStorage::write(uint32_t address, byte value) {
-  uint32_t byteLength = 1;
-  uint32_t retCode = flash_unlock((uint32_t)FLASH_START+address, (uint32_t)FLASH_START+address + byteLength - 1, 0, 0);
-  if (retCode != FLASH_RC_OK) {
-    _FLASH_DEBUG("Failed to unlock flash for write\n");
-    return false;
-  }
-
-  // write data
-  retCode = flash_write((uint32_t)FLASH_START+address, &value, byteLength, 1);
-
-  if (retCode != FLASH_RC_OK) {
-    _FLASH_DEBUG("Flash write failed\n");
-    return false;
-  }
-
-  // Lock page
-  retCode = flash_lock((uint32_t)FLASH_START+address, (uint32_t)FLASH_START+address + byteLength - 1, 0, 0);
-  if (retCode != FLASH_RC_OK) {
-    _FLASH_DEBUG("Failed to lock flash page\n");
-    return false;
-  }
-  return true;
 }
 
 bool DueFlashStorage::write(uint32_t address, const void *data, uint32_t dataLength) {

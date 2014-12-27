@@ -100,7 +100,10 @@ void Move::Spin()
 	// See if we can add another move to the ring
 	if (!addNoMoreMoves && ddaRingAddPointer->GetState() == DDA::empty)
 	{
-		ddaRingAddPointer->PrintIfHasStepError();
+		if (reprap.Debug(moduleMove))
+		{
+			ddaRingAddPointer->PrintIfHasStepError();
+		}
 		// If there's a G Code move available, add it to the DDA ring for processing.
 		float nextMove[DRIVES + 1];
 		EndstopChecks endStopsToCheck;

@@ -821,6 +821,64 @@ void RepRap::SetMessage(const char *msg)
 	message[maxMessageLength] = 0;
 }
 
+void RepRap::GetExtruderCapabilities(bool canDrive[], const bool directions[]) const
+{
+	for (uint8_t extruder=0; extruder<DRIVES - AXES; extruder++)
+	{
+		canDrive[extruder] = false;
+	}
+
+	Tool *tool = toolList;
+	while (tool != nullptr)
+	{
+		for(uint8_t driveNum = 0; driveNum < tool->DriveCount(); driveNum++)
+		{
+			const int extruderDrive = tool->Drive(driveNum);
+			canDrive[extruderDrive] = tool->ToolCanDrive(directions[extruderDrive + AXES] == FORWARDS);
+		}
+
+		tool = tool->Next();
+	}
+}
+
+void RepRap::FlagTemperatureFault(int8_t dudHeater)
+{
+	if (toolList != NULL)
+	{
+		toolList->FlagTemperatureFault(dudHeater);
+	}
+}
+
+void RepRap::ClearTemperatureFault(int8_t wasDudHeater)
+{
+	reprap.GetHeat()->ResetFault(wasDudHeater);
+	if (toolList != NULL)
+	{
+		toolList->ClearTemperatureFault(wasDudHeater);
+	}
+}
+
+void RepRap::SetDebug(uint16_t d)
+{
+	debug = d;
+	if (debug != 0)
+	{
+		platform->Message(BOTH_MESSAGE, "Debugging enabled for modules:%s%s%s%s%s%s%s\n",
+										(debug & (1 << modulePlatform)) ? " Platform" : "",
+										(debug & (1 << moduleNetwork)) ? " Network" : "",
+										(debug & (1 << moduleWebserver)) ? " Webserver" : "",
+										(debug & (1 << moduleGcodes)) ? " GCodes" : "",
+										(debug & (1 << moduleMove))	? " Move" : "",
+										(debug & (1 << moduleDda)) ? " DDA" : "",
+										(debug & (1 << moduleHeat)) ? " Heat" : ""
+									);
+	}
+	else
+	{
+		platform->Message(BOTH_MESSAGE, "Debugging disabled\n");
+	}
+}
+
 //*************************************************************************************************
 // StringRef class member implementations
 

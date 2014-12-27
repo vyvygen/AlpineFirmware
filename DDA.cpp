@@ -24,12 +24,10 @@ void DriveMovement::DebugPrint(char c) const
 					twoCsquaredTimesMmPerStepDivA
 					);
 		debugPrintf(" mmPerStepTimesCdivtopSpeed=%u sstcda=%u sstcda2=%" PRIu64 " adtcdtsmac=%d"
-					" tstcdapdsc=%u tstdca2=%" PRIu64
-					" tstcdaprsc=%u trsdtc2damtxtcda2=%" PRIu64
+					" tstcdapdsc=%u tstdca2=%" PRIu64 " fmsdmtstdca2=%" PRId64
 					"\n",
 					mmPerStepTimesCdivtopSpeed, startSpeedTimesCdivA, startSpeedTimesCdivAsquared, accelClocksMinusAccelDistanceTimesCdivTopSpeed,
-					topSpeedTimesCdivAPlusDecelStartClocks, topSpeedTimesCdivAsquaredPlusTwoDecelStartDistanceTimesCsquareddDivA,
-					topSpeedTimesCdivAPlusReverseStartClocks, twoRevStartDistanceTimesCsquareddDivAMinusTopSpeedTimesCdivAsquared
+					topSpeedTimesCdivAPlusDecelStartClocks, twoDistanceToStopTimesCsquaredDivA, fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA
 					);
 	}
 	else
@@ -300,9 +298,15 @@ float DDA::AdjustEndSpeed(float targetStartSpeed)
 		if (canAdjustPreviousMove)
 		{
 			float maxStartSpeed = min<float>(sqrt((endSpeed * endSpeed) + (2 * acceleration * totalDistance)), requestedSpeed);
-			debugPrintf("Recursion start\n");
+			if (reprap.Debug(moduleDda))
+			{
+				debugPrintf("Recursion start\n");
+			}
 			startSpeed = prev->AdjustEndSpeed(maxStartSpeed);		// TODO eliminate this recursive call! (but it's very rare)
-			debugPrintf("Recursion end\n");
+			if (reprap.Debug(moduleDda))
+			{
+				debugPrintf("Recursion end\n");
+			}
 			float maxEndSpeed = sqrt((startSpeed * startSpeed) + (2 * acceleration * totalDistance));
 			if (maxEndSpeed < endSpeed)
 			{
@@ -402,7 +406,8 @@ void DDA::Prepare()
 			float accelCompensationSteps = accelCompensationDistance * dm.stepsPerMm;
 
 			// Calculate the net total step count to allow for compensation (may be negative)
-			int32_t netSteps = (int32_t)dm.totalSteps + (int32_t)((endSpeed - startSpeed) * dm.compensationTime * dm.stepsPerMm);
+			// Note that we add totalSteps in floating point mode, to round the number of steps down consistently
+			int32_t netSteps = (int32_t)(((endSpeed - startSpeed) * dm.compensationTime * dm.stepsPerMm) + dm.totalSteps);
 
 			// Acceleration phase parameters
 			dm.accelStopStep = (uint32_t)((accelDistance * dm.stepsPerMm) + accelCompensationSteps) + 1;
@@ -415,52 +420,54 @@ void DDA::Prepare()
 
 			// Deceleration and reverse phase parameters
 			dm.decelStartStep = (uint32_t)((decelStartDistance * dm.stepsPerMm) + accelCompensationSteps) + 1;
+			const int32_t initialDecelSpeedTimesCdivA = (int32_t)topSpeedTimesCdivA - (int32_t)compensationClocks;	// signed because it may be negative and we square it
+			const uint64_t initialDecelSpeedTimesCdivASquared = (int64_t)initialDecelSpeedTimesCdivA * initialDecelSpeedTimesCdivA;
+			dm.topSpeedTimesCdivAPlusDecelStartClocks = topSpeedTimesCdivAPlusDecelStartClocks - compensationClocks;
+			dm.twoDistanceToStopTimesCsquaredDivA =
+				initialDecelSpeedTimesCdivASquared + (uint64_t)(((decelStartDistance + accelCompensationDistance) * (stepClockRateSquared * 2))/acceleration);
+
 			float initialDecelSpeed = topSpeed - acceleration * dm.compensationTime;
 			float reverseStartDistance = (initialDecelSpeed > 0.0) ? initialDecelSpeed * initialDecelSpeed/(2 * acceleration) + decelStartDistance : decelStartDistance;
-			dm.reverseStartStep = (uint32_t)((reverseStartDistance * dm.stepsPerMm) + accelCompensationSteps) + 1;
-			const int32_t topSpeedTimesCdivAMinusComp = (int32_t)topSpeedTimesCdivA - (int32_t)compensationClocks;	// signed because it may be negative and we square it
-			const uint64_t topSpeedTimesCdivASquared = (int64_t)topSpeedTimesCdivAMinusComp * topSpeedTimesCdivAMinusComp;
-
-			// Deceleration phase parameters
-			if (decelDistance > 0.0 && dm.decelStartStep < dm.reverseStartStep)
-			{
-				// Deceleration phase parameters
-				dm.topSpeedTimesCdivAPlusDecelStartClocks = topSpeedTimesCdivAPlusDecelStartClocks - compensationClocks;
-				dm.topSpeedTimesCdivAsquaredPlusTwoDecelStartDistanceTimesCsquareddDivA =
-						topSpeedTimesCdivASquared + (uint64_t)(((decelStartDistance + accelCompensationDistance) * (stepClockRateSquared * 2))/acceleration);
-			}
-			else
-			{
-				// There is no deceleration phase
-				dm.topSpeedTimesCdivAPlusDecelStartClocks = 0;
-				dm.topSpeedTimesCdivAsquaredPlusTwoDecelStartDistanceTimesCsquareddDivA = 0;
-			}
 
 			// Reverse phase parameters
-			if (reverseStartDistance < totalDistance)
+			if (reverseStartDistance >= totalDistance)
 			{
-				// Reverse motion phase parameters
-				dm.totalSteps = (int32_t)(2 * (dm.reverseStartStep - 1)) - netSteps;
-				uint32_t reverseStartClocks = (initialDecelSpeed > 0.0) ? (uint32_t)(decelStartTime + (initialDecelSpeed/acceleration) * stepClockRate) : decelStartClocks;
-				dm.topSpeedTimesCdivAPlusReverseStartClocks = topSpeedTimesCdivA + reverseStartClocks - compensationClocks;
-				dm.twoRevStartDistanceTimesCsquareddDivAMinusTopSpeedTimesCdivAsquared =
-						(uint64_t)((reverseStartDistance + accelCompensationDistance) * (stepClockRateSquared * 2)/acceleration) - topSpeedTimesCdivASquared;
+				// No reverse phase
+				dm.totalSteps = netSteps;
+				dm.reverseStartStep = netSteps + 1;
+				dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA = 0;
 			}
 			else
 			{
-				dm.totalSteps = netSteps;
-				dm.reverseStartStep = netSteps + 1;
-				dm.topSpeedTimesCdivAPlusReverseStartClocks = 0;
-				dm.twoRevStartDistanceTimesCsquareddDivAMinusTopSpeedTimesCdivAsquared = 0;
+				dm.reverseStartStep = (initialDecelSpeed < 0.0)
+										? dm.decelStartStep
+										: (dm.twoDistanceToStopTimesCsquaredDivA/dm.twoCsquaredTimesMmPerStepDivA) + 1;
+				// Because the step numbers are rounded down, we may sometimes get a situation in which netSteps = 1 and reverseStartStep = 1.
+				// This would lead to totalSteps = -1, which must be avoided.
+				int32_t overallSteps = (int32_t)(2 * (dm.reverseStartStep - 1)) - netSteps;
+				if (overallSteps > 0)
+				{
+					dm.totalSteps = overallSteps;
+					dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA =
+							(int64_t)((2 * (dm.reverseStartStep - 1)) * dm.twoCsquaredTimesMmPerStepDivA) - (int64_t)dm.twoDistanceToStopTimesCsquaredDivA;
+				}
+				else
+				{
+					dm.totalSteps = (uint)max<int32_t>(netSteps, 0);
+					dm.reverseStartStep = dm.totalSteps + 1;
+					dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA = 0;
+				}
 			}
 
-			if (dm.totalSteps > 1000000
+			// Check for sensible values, print them if they look dubious
+			if (reprap.Debug(moduleDda)
+				&& (   dm.totalSteps > 1000000
 					|| dm.reverseStartStep < dm.decelStartStep
-					|| dm.twoRevStartDistanceTimesCsquareddDivAMinusTopSpeedTimesCdivAsquared > dm.twoCsquaredTimesMmPerStepDivA * dm.reverseStartStep
+					|| (dm.reverseStartStep <= dm.totalSteps && dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA > (int64_t)(dm.twoCsquaredTimesMmPerStepDivA * dm.reverseStartStep))
+				  )
 			   )
 			{
 				DebugPrint();
-//				dm.DebugPrint('0' + drive);
 				reprap.GetPlatform()->GetLine()->Flush();
 			}
 
@@ -475,11 +482,11 @@ void DDA::Prepare()
 		}
 	}
 
-	if ((reprap.Debug() & (1 << moduleMove)) && (ddm[3].moving || ddm[4].moving))
-	{
-		DebugPrint();
-		reprap.GetPlatform()->GetLine()->Flush();
-	}
+//	if (reprap.Debug(moduleDda) && (ddm[3].moving || ddm[4].moving))
+//	{
+//		DebugPrint();
+//		reprap.GetPlatform()->GetLine()->Flush();
+//	}
 //debugPrintf("Done\n");
 //reprap.GetPlatform()->GetLine()->Flush();
 
@@ -537,7 +544,7 @@ inline uint32_t DDA::CalcNextStepTime(DriveMovement& dm, size_t drive)
 	else if (dm.nextStep < dm.reverseStartStep)
 	{
 		dm.nextStepTime = dm.topSpeedTimesCdivAPlusDecelStartClocks
-							- isqrt(dm.topSpeedTimesCdivAsquaredPlusTwoDecelStartDistanceTimesCsquareddDivA - (dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep));
+							- isqrt(dm.twoDistanceToStopTimesCsquaredDivA - (dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep));
 	}
 	else
 	{
@@ -545,8 +552,8 @@ inline uint32_t DDA::CalcNextStepTime(DriveMovement& dm, size_t drive)
 		{
 			reprap.GetPlatform()->SetDirection(drive, !dm.direction, false);
 		}
-		dm.nextStepTime = dm.topSpeedTimesCdivAPlusReverseStartClocks
-							+ isqrt((dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep) - dm.twoRevStartDistanceTimesCsquareddDivAMinusTopSpeedTimesCdivAsquared);
+		dm.nextStepTime = dm.topSpeedTimesCdivAPlusDecelStartClocks
+							+ isqrt((int64_t)(dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep) - dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA);
 
 	}
 	//TODO include delta support

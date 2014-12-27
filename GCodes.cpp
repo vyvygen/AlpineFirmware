@@ -3556,7 +3556,7 @@ bool GCodeBuffer::Put(char c)
 	{
 		gcodeBuffer[gcodePointer] = 0;
 		Init();
-		if ((reprap.Debug() & (1 << moduleGcodes)) && gcodeBuffer[0] && !writingFileDirectory) // Don't bother with blank/comment lines
+		if (reprap.Debug(moduleGcodes) && gcodeBuffer[0] && !writingFileDirectory) // Don't bother with blank/comment lines
 		{
 			platform->Message(HOST_MESSAGE, "%s%s\n", identity, gcodeBuffer);
 		}
