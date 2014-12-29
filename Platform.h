@@ -119,6 +119,7 @@ const unsigned int numZProbeReadingsAveraged = 8;	// we average this number of r
 
 #define AXIS_MAXIMA {230, 200, 200} 			// mm
 #define AXIS_MINIMA {0, 0, 0}					// mm
+const float defaultPrintRadius = 50;			// mm
 #define HOME_FEEDRATES {50.0, 50.0, 100.0/60.0}	// mm/sec (dc42 increased Z because we slow down z-homing when approaching the target height)
 
 #define X_AXIS 0  								// The index of the X axis in the arrays
@@ -633,6 +634,8 @@ public:
   float AxisTotalLength(int8_t axis) const;
   float GetElasticComp(size_t drive) const;
   void SetElasticComp(size_t drive, float factor);
+  float GetPrintRadius() const { return printRadius; }
+  void SetPrintRadius(float r) { printRadius = r; }
 
   // Z probe
 
@@ -776,6 +779,7 @@ private:
 
   float axisMaxima[AXES];
   float axisMinima[AXES];
+  float printRadius;
   float homeFeedrates[AXES];
   
 // HEATERS - Bed is assumed to be the first

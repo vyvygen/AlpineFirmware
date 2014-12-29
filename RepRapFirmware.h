@@ -145,6 +145,11 @@ template<> inline double max(double _a, double _b)
 	return (isnan(_a) || _a > _b) ? _a : _b;
 }
 
+template<class X> inline X square(X arg)
+{
+	return arg * arg;
+}
+
 #endif
 
 

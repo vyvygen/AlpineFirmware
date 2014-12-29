@@ -32,7 +32,7 @@ public:
     void Init();										// Start me up
     void Spin();										// Called in a tight loop to keep the class going
     void Exit();										// Shut down
-    void GetCurrentUserPosition(float m[]) const; 		// Return the position (after all queued moves have been executed) in transformed coords
+    void GetCurrentUserPosition(float m[], bool disableDeltaMapping) const;	// Return the position (after all queued moves have been executed) in transformed coords
     void LiveCoordinates(float m[]) const;				// Gives the last point at the end of the last complete DDA transformed to user coords
     void Interrupt();									// The hardware's (i.e. platform's)  interrupt should call this.
     void InterruptTime();								// Test function - not used
@@ -42,6 +42,7 @@ public:
     void HitLowStop(size_t drive, DDA* hitDDA);			// What to do when a low endstop is hit
     void HitHighStop(size_t drive, DDA* hitDDA);		// What to do when a high endstop is hit
     void SetPositions(float move[]);					// Force the coordinates to be these
+    void SetPositionsFromDDA(const DDA *hitDDA);		// Update the coordinates after an aborted move
     void SetFeedrate(float feedRate);					// Sometimes we want to override the feed rate
     void SetLiveCoordinates(float coords[]);			// Force the live coordinates (see above) to be these
     void SetXBedProbePoint(int index, float x);			// Record the X coordinate of a probe point
@@ -77,6 +78,7 @@ public:
     const float *GetDeltaEndstopAdjustments() const;
     void SetDeltaEndstopAdjustments(float x, float y, float z);
     bool StartNextMove(uint32_t startTime);				// start the next move, returning true if Step() needs to be called immediately
+    bool IsDeltaMode() const { return deltaMode; }
 
     void PrintCurrentDda() const;						// For debugging
 

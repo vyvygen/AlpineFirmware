@@ -589,24 +589,33 @@ if (numReps > maxReps) maxReps = numReps;
 				// Hit anything?
 				if ((endStopsToCheck & (1 << drive)) != 0)
 				{
+					endStopsToCheck &= ~(1 << drive);						// clear this check so that we can check for more
 					switch(reprap.GetPlatform()->Stopped(drive))
 					{
 					case lowHit:
+						ddm[drive].moving = false;							// stop this drive
 						reprap.GetMove()->HitLowStop(drive, this);
-						moveCompletedTime = now + settleClocks;
-						state = completed;
+						if (endStopsToCheck == 0)							// if no more endstops to check
+						{
+							moveCompletedTime = now + settleClocks;
+							MoveAborted();
+						}
 						break;
 
 					case highHit:
+						ddm[drive].moving = false;							// stop this drive
 						reprap.GetMove()->HitHighStop(drive, this);
-						moveCompletedTime = now + settleClocks;
-						state = completed;
+						if (endStopsToCheck == 0)							// if no more endstops to check
+						{
+							moveCompletedTime = now + settleClocks;
+							MoveAborted();
+						}
 						break;
 
 					case lowNear:
 						{
-							// This code assumes that only one endstop is enabled at a time, which is the usual case.
-							// Also, at present only the Z axis can give a LowNear indication anyway.
+							// This code assumes that only one endstop that supports the 'near' function is enabled at a time.
+							// Typically, only the Z axis can give a LowNear indication anyway.
 							float instantDv = reprap.GetPlatform()->ConfiguredInstantDv(drive);
 							if (instantDv < topSpeed)
 							{
@@ -684,6 +693,8 @@ void DDA::MoveAborted()
 			}
 		}
 	}
+	reprap.GetMove()->SetPositionsFromDDA(this);
+	state = completed;
 }
 
 // Reduce the speed of this move to the indicated speed.

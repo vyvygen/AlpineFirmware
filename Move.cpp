@@ -107,10 +107,14 @@ void Move::Spin()
 		// If there's a G Code move available, add it to the DDA ring for processing.
 		float nextMove[DRIVES + 1];
 		EndstopChecks endStopsToCheck;
-		if (reprap.GetGCodes()->ReadMove(nextMove, endStopsToCheck))
+		bool noDeltaMapping;
+		if (reprap.GetGCodes()->ReadMove(nextMove, endStopsToCheck, noDeltaMapping))
 		{
 			currentFeedrate = nextMove[DRIVES];		// might be G1 with just an F field
-			Transform(nextMove);
+			if (!noDeltaMapping || !deltaMode)
+			{
+				Transform(nextMove);
+			}
 			if (ddaRingAddPointer->Init(nextMove, endStopsToCheck))
 			{
 				const int32_t* machineCoords = ddaRingAddPointer->MachineCoordinates();
@@ -635,7 +639,6 @@ bool Move::StartNextMove(uint32_t startTime)
 // This is called from the step ISR. Any variables it modifies that are also read by code outside the ISR must be declared 'volatile'.
 void Move::HitLowStop(size_t drive, DDA* hitDDA)
 {
-	hitDDA->MoveAborted();
 	float hitPoint = reprap.GetPlatform()->AxisMinimum(drive);
 	if(drive == Z_AXIS)
 	{
@@ -668,26 +671,25 @@ void Move::HitLowStop(size_t drive, DDA* hitDDA)
 	}
 	int32_t coord = EndPointToMachine(drive, hitPoint);
 	hitDDA->SetDriveCoordinate(coord, drive);
-	const int32_t* pos = hitDDA->MachineCoordinates();
-	for (size_t i = 0; i < AXES; ++i)
-	{
-		nextMachineEndPoints[i] = pos[i];
-	}
 	reprap.GetGCodes()->SetAxisIsHomed(drive);
 }
 
 // This is called from the step ISR. Any variables it modifies that are also read by code outside the ISR must be declared 'volatile'.
 void Move::HitHighStop(size_t drive, DDA* hitDDA)
 {
-	hitDDA->MoveAborted();
 	int32_t coord = EndPointToMachine(drive, reprap.GetPlatform()->AxisMaximum(drive));
 	hitDDA->SetDriveCoordinate(coord, drive);
+	reprap.GetGCodes()->SetAxisIsHomed(drive);
+}
+
+// Update the current position after an aborted move
+void Move::SetPositionsFromDDA(const DDA *hitDDA)
+{
 	const int32_t* pos = hitDDA->MachineCoordinates();
 	for (size_t i = 0; i < AXES; ++i)
 	{
 		nextMachineEndPoints[i] = pos[i];
 	}
-	reprap.GetGCodes()->SetAxisIsHomed(drive);
 }
 
 // Return the untransformed machine coordinates
@@ -709,10 +711,13 @@ void Move::GetCurrentMachinePosition(float m[]) const
 }
 
 // Return the transformed machine coordinates
-void Move::GetCurrentUserPosition(float m[]) const
+void Move::GetCurrentUserPosition(float m[], bool disableDeltaMapping) const
 {
 	GetCurrentMachinePosition(m);
-	InverseTransform(m);
+	if (!disableDeltaMapping || !deltaMode)
+	{
+		InverseTransform(m);
+	}
 }
 
 void Move::SetXBedProbePoint(int index, float x)

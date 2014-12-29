@@ -200,6 +200,7 @@ void Platform::Init()
 
 	ARRAY_INIT(axisMaxima, AXIS_MAXIMA);
 	ARRAY_INIT(axisMinima, AXIS_MINIMA);
+	printRadius = defaultPrintRadius;
 	ARRAY_INIT(homeFeedrates, HOME_FEEDRATES);
 
 	SetSlowestDrive();

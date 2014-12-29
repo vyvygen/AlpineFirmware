@@ -277,7 +277,7 @@ bool GCodes::AllMovesAreFinishedAndMoveBufferIsLoaded()
 	reprap.GetMove()->ResumeMoving();
 
 	// Load the last position; If Move can't accept more, return false - should never happen
-	reprap.GetMove()->GetCurrentUserPosition(moveBuffer);
+	reprap.GetMove()->GetCurrentUserPosition(moveBuffer, false);
 	return true;
 }
 
@@ -344,21 +344,18 @@ bool GCodes::Pop()
 bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyLimits)
 {
 	// Zero every extruder drive as some drives may not be changed
-
 	for(int8_t drive = AXES; drive < DRIVES; drive++)
 	{
 		moveBuffer[drive] = 0.0;
 	}
 
 	// Deal with feed rate
-
 	if(gb->Seen(feedrateLetter))
 	{
 		moveBuffer[DRIVES] = gb->GetFValue() * distanceScale * speedFactor;
 	}
 
 	// First do extrusion, and check, if we are extruding, that we have a tool to extrude with
-
 	Tool* tool = reprap.GetCurrentTool();
 	if(gb->Seen(extrudeLetter))
 	{
@@ -391,10 +388,9 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 
 			// Set the drive values for this tool.
 			// zpl-2014-10-03: Do NOT check extruder temperatures here, because we may be executing queued codes like M116
-
-			for(int8_t eDrive = 0; eDrive < eMoveCount; eDrive++)
+			for(int eDrive = 0; eDrive < eMoveCount; eDrive++)
 			{
-				int8_t drive = tool->Drive(eDrive);
+				int drive = tool->Drive(eDrive);
 				float moveArg = eMovement[eDrive] * distanceScale;
 				if(doingG92)
 				{
@@ -416,7 +412,6 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 	}
 
 	// Now the movement axes
-
 	const Tool *currentTool = reprap.GetCurrentTool();
 	for(uint8_t axis = 0; axis < AXES; axis++)
 	{
@@ -437,7 +432,7 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 				{
 					moveArg -= currentTool->GetOffset()[axis];		// adjust requested position to compensate for tool offset
 				}
-				if (applyLimits && axis < 2 && axisIsHomed[axis])	// limit X & Y moves unless doing G92
+				if (applyLimits && axis < 2 && axisIsHomed[axis] && !reprap.GetMove()->IsDeltaMode())	// on a Cartesian printer, limit X & Y moves unless doing G92
 				{
 					if (moveArg < platform->AxisMinimum(axis))
 					{
@@ -450,6 +445,19 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 				}
 			}
 			moveBuffer[axis] = moveArg;
+		}
+	}
+
+	if (applyLimits && reprap.GetMove()->IsDeltaMode())
+	{
+		// Constrain the move to be within the build radius
+		float diagonalSquared = square(moveBuffer[X_AXIS]) + square(moveBuffer[Y_AXIS]);
+		float printRadiusSquared = square(platform->GetPrintRadius());
+		if (diagonalSquared > printRadiusSquared)
+		{
+			float factor = sqrt(printRadiusSquared/diagonalSquared);
+			moveBuffer[X_AXIS] *= factor;
+			moveBuffer[Y_AXIS] *= factor;
 		}
 	}
 
@@ -469,17 +477,17 @@ int GCodes::SetUpMove(GCodeBuffer *gb)
 	if (moveAvailable)
 		return 0;
 
-	// Load the last position and feed rate into moveBuffer; If Move can't accept more, return false
-	reprap.GetMove()->GetCurrentUserPosition(moveBuffer);
-
-	moveBuffer[DRIVES] *= speedFactorChange;		// account for any change in the speed factor since the last move
-	speedFactorChange = 1.0;
-
 	// Check to see if the move is a 'homing' move that endstops are checked on.
 	endStopsToCheck = 0;
+	disableDeltaMapping = false;
 	if (gb->Seen('S'))
 	{
-		if (gb->GetIValue() == 1)
+		int ival = gb->GetIValue();
+		if (ival == 1 || ival == 2)
+		{
+			disableDeltaMapping = true;		// if on a delta printer, don't do delta mapping for this move
+		}
+		if (ival == 1)
 		{
 			for (unsigned int i = 0; i < AXES; ++i)
 			{
@@ -491,24 +499,44 @@ int GCodes::SetUpMove(GCodeBuffer *gb)
 		}
 	}
 
+	if (disableDeltaMapping && !axesRelative && reprap.GetMove()->IsDeltaMode())
+	{
+		// We have been asked to do a move without delta mapping on a delta machine, but the move is not relative.
+		// This is dangerous and almost certainly a user mistake, so ignore the move.
+		platform->Message(BOTH_ERROR_MESSAGE, "Attempt to move the motors of a delta printer to absolute positions\n");
+		return 0;
+	}
+
+	// Load the last position and feed rate into moveBuffer; if Move can't accept more, return false
+	reprap.GetMove()->GetCurrentUserPosition(moveBuffer, disableDeltaMapping);
+
+	moveBuffer[DRIVES] *= speedFactorChange;		// account for any change in the speed factor since the last move
+	speedFactorChange = 1.0;
+
 	// Load the move buffer with either the absolute movement required or the relative movement required
-	moveAvailable = LoadMoveBufferFromGCode(gb, false, (endStopsToCheck == 0) && limitAxes);
+	moveAvailable = LoadMoveBufferFromGCode(gb, false, limitAxes && !disableDeltaMapping);
 	return (endStopsToCheck != 0) ? 2 : 1;
 }
 
 // The Move class calls this function to find what to do next.
 
-bool GCodes::ReadMove(float m[], EndstopChecks& ce)
+bool GCodes::ReadMove(float m[], EndstopChecks& ce, bool& noDeltaMapping)
 {
 	if (!moveAvailable)
+	{
 		return false;
+	}
+
 	for (int8_t i = 0; i <= DRIVES; i++) // 1 more for feedrate
 	{
 		m[i] = moveBuffer[i];
 	}
 	ce = endStopsToCheck;
+	noDeltaMapping = disableDeltaMapping;
+
 	moveAvailable = false;
 	endStopsToCheck = 0;
+	disableDeltaMapping = false;
 	return true;
 }
 
@@ -711,7 +739,7 @@ bool GCodes::OffsetAxes(GCodeBuffer* gb)
 // Returns true if completed, false if needs to be called again.
 // 'reply' is only written if there is an error.
 // 'error' is false on entry, gets changed to true if there is an error.
-bool GCodes::DoHome(StringRef& reply, bool& error)
+bool GCodes::HomeCartesian(StringRef& reply, bool& error)
 //pre(reply.upb == STRING_LENGTH)
 {
 	if (homeX && homeY && homeZ)
@@ -797,6 +825,26 @@ bool GCodes::DoHome(StringRef& reply, bool& error)
 	moveAvailable = false;
 
 	return true;
+}
+
+bool GCodes::HomeDelta(StringRef& reply, bool& error)
+{
+	if (!homing)
+	{
+		homing = true;
+		axisIsHomed[X_AXIS] = false;
+		axisIsHomed[Y_AXIS] = false;
+		axisIsHomed[Z_AXIS] = false;
+	}
+	if (DoFileMacro(HOME_DELTA_G))
+	{
+		homing = false;
+		homeX = false;
+		homeY = false;
+		homeZ = false;
+		return true;
+	}
+	return false;
 }
 
 // This lifts Z a bit, moves to the probe XY coordinates (obtained by a call to GetProbeCoordinates() ),
@@ -1876,19 +1924,26 @@ bool GCodes::HandleGcode(GCodeBuffer* gb)
 		break;
 
 	case 28: // Home
-		if (NoHome())
+		if (reprap.GetMove()->IsDeltaMode())
 		{
-			homeX = gb->Seen(axisLetters[X_AXIS]);
-			homeY = gb->Seen(axisLetters[Y_AXIS]);
-			homeZ = gb->Seen(axisLetters[Z_AXIS]);
+			result = HomeDelta(reply, error);
+		}
+		else
+		{
 			if (NoHome())
 			{
-				homeX = true;
-				homeY = true;
-				homeZ = true;
+				homeX = gb->Seen(axisLetters[X_AXIS]);
+				homeY = gb->Seen(axisLetters[Y_AXIS]);
+				homeZ = gb->Seen(axisLetters[Z_AXIS]);
+				if (NoHome())
+				{
+					homeX = true;
+					homeY = true;
+					homeZ = true;
+				}
 			}
+			result = HomeCartesian(reply, error);
 		}
-		result = DoHome(reply, error);
 		break;
 
 	case 30: // Z probe/manually set at a position and set that as point P
@@ -2705,18 +2760,31 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 				}
 			}
 
+			if (!setMin && gb->Seen('R'))
+			{
+				platform->SetPrintRadius(gb->GetFValue() * distanceScale);
+				seen = true;
+			}
+
 			if (!seen)
 			{
-				reply.copy("Axis limits - ");
-				char comma = ',';
-				for(int8_t axis = 0; axis < AXES; axis++)
+				if (reprap.GetMove()->IsDeltaMode())
 				{
-					if(axis == AXES - 1)
+					reply.printf("Print radius: %.1f, max Z: %.1f\n", platform->GetPrintRadius()/distanceScale, platform->AxisMaximum(Z_AXIS));
+				}
+				else
+				{
+					reply.copy("Axis limits - ");
+					char comma = ',';
+					for(int8_t axis = 0; axis < AXES; axis++)
 					{
-						comma = '\n';
+						if(axis == AXES - 1)
+						{
+							comma = '\n';
+						}
+						reply.catf("%c: %.1f min, %.1f max%c ", axisLetters[axis],
+								platform->AxisMinimum(axis), platform->AxisMaximum(axis), comma);
 					}
-					reply.catf("%c: %.1f min, %.1f max%c ", axisLetters[axis],
-							platform->AxisMinimum(axis), platform->AxisMaximum(axis), comma);
 				}
 			}
 		}
@@ -3255,7 +3323,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			}
 			else
 			{
-				reply.printf("Elastic compensation for drive %u is %.3f\n", drive, platform->GetElasticComp(drive));
+				reply.printf("Elastic compensation for drive %u is %.3f seconds\n", drive, platform->GetElasticComp(drive));
 			}
 		}
 		break;
@@ -3268,12 +3336,12 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			bool seen = false;
 			if (gb->Seen('L'))
 			{
-				diagonal = gb->GetFValue();
+				diagonal = gb->GetFValue() * distanceScale;
 				seen = true;
 			}
 			if (gb->Seen('R'))
 			{
-				radius = gb->GetFValue();
+				radius = gb->GetFValue() * distanceScale;
 				seen = true;
 			}
 			if (seen)
@@ -3282,7 +3350,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			}
 			else
 			{
-				reply.printf("Delta diagonal: %.1f, delta radius: %.1f\n", diagonal, radius);
+				reply.printf("Delta diagonal: %.1f, delta radius: %.1f\n", diagonal/distanceScale, radius/distanceScale);
 			}
 		}
 		break;
