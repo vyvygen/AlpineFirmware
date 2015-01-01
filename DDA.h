@@ -88,6 +88,7 @@ public:
 	DDA* GetPrevious() const { return prev; }
 	int32_t GetTimeLeft() const;
 	float MachineToEndPoint(size_t drive) const;					// Convert a move endpoint to real mm coordinates
+	void SetStoppedHeight();										// Set the Z height when the sensor has just been triggered
 	static int32_t EndPointToMachine(size_t drive, float coord);
 	const int32_t *MachineCoordinates() const { return endPoint; }	// Get endpoints of a move in machine coordinates
 	void MoveAborted();

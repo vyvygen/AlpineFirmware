@@ -640,31 +640,24 @@ bool Move::StartNextMove(uint32_t startTime)
 void Move::HitLowStop(size_t drive, DDA* hitDDA)
 {
 	float hitPoint = reprap.GetPlatform()->AxisMinimum(drive);
-	if(drive == Z_AXIS)
+	if (drive == Z_AXIS)
 	{
-		if(zProbing)
+		if (zProbing && reprap.GetGCodes()->GetAxisIsHomed(drive))
 		{
-			// Executing G32, so record the Z position at which we hit the end stop
-			if (reprap.GetGCodes()->GetAxisIsHomed(drive))
-			{
-				// Z-axis has already been homed, so just record the height of the bed at this point
-				lastZHit = hitDDA->MachineToEndPoint(drive) - reprap.GetPlatform()->ZProbeStopHeight();
-				return;
-			}
-			else
-			{
-				// Z axis has not yet been homed, so treat this probe as a homing command
-				lastZHit = 0.0;
-				hitPoint = reprap.GetPlatform()->ZProbeStopHeight();
-			}
+			// Executing G32 and Z-axis has already been homed, so record the Z position at which we hit the end stop
+			hitDDA->SetStoppedHeight();
+			lastZHit = hitDDA->MachineToEndPoint(drive) - reprap.GetPlatform()->ZProbeStopHeight();
+			return;
 		}
 		else
 		{
 			// Executing G30, so set the current Z height to the value at which the end stop is triggered
-			// Transform it first so that the height is correct in user coordinates
+			// OR executing the first move of a G32 and Z axis has not yet been homed
+			// Transform the height first so that the height is correct in user coordinates
+			lastZHit = 0.0;								// in case this is the first move of a G32
 			float xyzPoint[DRIVES + 1];
 			LiveCoordinates(xyzPoint);
-			xyzPoint[Z_AXIS] = lastZHit = reprap.GetPlatform()->ZProbeStopHeight();
+			xyzPoint[Z_AXIS] = reprap.GetPlatform()->ZProbeStopHeight();
 			Transform(xyzPoint);
 			hitPoint = xyzPoint[Z_AXIS];
 		}

@@ -589,10 +589,10 @@ if (numReps > maxReps) maxReps = numReps;
 				// Hit anything?
 				if ((endStopsToCheck & (1 << drive)) != 0)
 				{
-					endStopsToCheck &= ~(1 << drive);						// clear this check so that we can check for more
 					switch(reprap.GetPlatform()->Stopped(drive))
 					{
 					case lowHit:
+						endStopsToCheck &= ~(1 << drive);					// clear this check so that we can check for more
 						ddm[drive].moving = false;							// stop this drive
 						reprap.GetMove()->HitLowStop(drive, this);
 						if (endStopsToCheck == 0)							// if no more endstops to check
@@ -603,6 +603,7 @@ if (numReps > maxReps) maxReps = numReps;
 						break;
 
 					case highHit:
+						endStopsToCheck &= ~(1 << drive);					// clear this check so that we can check for more
 						ddm[drive].moving = false;							// stop this drive
 						reprap.GetMove()->HitHighStop(drive, this);
 						if (endStopsToCheck == 0)							// if no more endstops to check
@@ -685,16 +686,31 @@ void DDA::MoveAborted()
 			int32_t stepsLeft = dm.totalSteps - dm.nextStep;
 			if (dm.direction)
 			{
-				endPoint[drive] += stepsLeft;			// we were going backwards
+				endPoint[drive] -= stepsLeft;			// we were going forwards
 			}
 			else
 			{
-				endPoint[drive] -= stepsLeft;			// we were going forwards
+				endPoint[drive] += stepsLeft;			// we were going backwards
 			}
 		}
 	}
 	reprap.GetMove()->SetPositionsFromDDA(this);
 	state = completed;
+}
+
+// As MoveAborted, but just do the Z axis, unconditionally
+void DDA::SetStoppedHeight()
+{
+	const DriveMovement& dm = ddm[Z_AXIS];
+	int32_t stepsLeft = dm.totalSteps - dm.nextStep;
+	if (dm.direction)
+	{
+		endPoint[Z_AXIS] -= stepsLeft;					// we were going forwards
+	}
+	else
+	{
+		endPoint[Z_AXIS] += stepsLeft;					// we were going backwards
+	}
 }
 
 // Reduce the speed of this move to the indicated speed.
