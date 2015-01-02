@@ -105,9 +105,11 @@ private:
 	static const uint32_t minInterruptInterval = 6;					// about 2us minimum interval between interrupts, in clocks
 	static const uint32_t settleClocks = stepClockRate/50;			// settling time after hitting an endstop (20ms)
 
-	float AdjustEndSpeed(float idealStartSpeed);					// adjust the end speed to match the following move
-	uint32_t CalcNextStepTime(DriveMovement& dm, size_t drive);
-	void ReduceHomingSpeed(float newSpeed, size_t endstopDrive);
+	static void DoLookahead(DDA *laDDA);							// called by AdjustEndSpeed to do the real work
+	void RecalculateMove();
+	void CalcNewSpeeds();
+	uint32_t CalcNextStepTime(DriveMovement& dm, size_t drive);		// called to calculate the time when the next step is due
+	void ReduceHomingSpeed(float newSpeed, size_t endstopDrive);	// called to reduce homing speed when a near-endstop is triggered
 
 	DDA* next;								// The next one in the ring
 	DDA *prev;								// The previous one in the ring
@@ -129,6 +131,9 @@ private:
 	float accelStopTime;
 	float decelStartTime;
 	float totalTime;
+
+	// This is a temporary, used to keep track of the lookahead to avoid making recursive calls
+	float targetNextSpeed;					// The speed that the next move would like to start at
 
 	// These are calculated from the above and used in the ISR, so they are set up by Prepare()
 	uint32_t decelStartClocks;

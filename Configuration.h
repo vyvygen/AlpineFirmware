@@ -24,8 +24,8 @@ Licence: GPL
 #define CONFIGURATION_H
 
 #define NAME "RepRapFirmware"
-#define VERSION "0.80b-delta-dc42"
-#define DATE "2015-01-01"
+#define VERSION "0.80c-delta-dc42"
+#define DATE "2015-01-02"
 #define AUTHORS "reprappro, dc42, zpl"
 
 // Other firmware that we might switch to be compatible with.
@@ -60,8 +60,6 @@ enum Compatibility
 #define BAD_LOW_TEMPERATURE -10.0
 #define BAD_HIGH_TEMPERATURE 300.0
 
-#define STANDBY_INTERRUPT_RATE 2.0e-4 // Seconds
-
 #define NUMBER_OF_PROBE_POINTS 5	// Maximum number of probe points
 #define Z_DIVE 5.0  				// Height from which to probe the bed (mm)
 #define TRIANGLE_0 -0.001			// Slightly less than 0 for point-in-triangle tests
@@ -86,9 +84,6 @@ enum Compatibility
 #define PAUSE_G "pause.g"
 #define RESUME_G "resume.g"
 
-#define WEB_DEBUG_TRUE 9
-#define WEB_DEBUG_FALSE 8
-
 #define LIST_SEPARATOR ':'						// Lists in G Codes
 #define FILE_LIST_SEPARATOR ','					// Put this between file names when listing them
 #define FILE_LIST_BRACKET '"'					// Put these round file names when listing them
@@ -107,4 +102,5 @@ enum Compatibility
 #define BOTH_MESSAGE 'B'						// Type byte of message that is to be sent to the web & host
 #define BOTH_ERROR_MESSAGE 'A'					// Type byte of message that is to be sent to the web & host - flags an error
 #define DEBUG_MESSAGE 'D'						// Type byte of debug message to send in blocking mode to USB
+
 #endif

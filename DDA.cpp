@@ -160,49 +160,20 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce)
 		// There is no previous move that we can adjust, so this move must start at zero speed, and for now it must also end at zero speed.
 		// Calculate the distance required to accelerate to the requested speed: v^2 = u^2 + 2as
 		startSpeed = 0.0;
-		float distanceToReqSpeed = (requestedSpeed * requestedSpeed)/(2.0 * acceleration);
-		if (distanceToReqSpeed * 2 >= totalDistance)
-		{
-			// we can't reach the requested speed, so just accelerate and decelerate
-			accelDistance = decelDistance = totalDistance * 0.5;
-			topSpeed = sqrt(accelDistance * acceleration * 2.0);
-			//moveType = accelDecel;
-		}
-		else
-		{
-			accelDistance = decelDistance = distanceToReqSpeed;
-			topSpeed = requestedSpeed;
-		}
 	}
 	else
 	{
+		// Try to meld this move to the previous move to avoid stop/start
 		// Assuming that this move ends with zero speed, calculate the maximum possible starting speed: u^2 = v^2 - 2as
 		float maxStartSpeed = sqrt(acceleration * totalDistance * 2.0);
 
 		// Determine the ideal starting speed, given that the end speed is constrained to zero until we have another move to follow it
-		float idealStartSpeed = min<float>(maxStartSpeed, requestedSpeed);
-
-		// Try to meld this move to the previous move to avoid stop/start
-		startSpeed = prev->AdjustEndSpeed(idealStartSpeed);
-		accelDistance = ((requestedSpeed * requestedSpeed) - (startSpeed * startSpeed))/(2.0 * acceleration);
-		decelDistance = (requestedSpeed * requestedSpeed)/(2.0 * acceleration);		// end speed is zero
-		if (accelDistance + decelDistance >= totalDistance)
-		{
-			// It's an accelerate-decelerate move. If V is the peak speed, then (V^2 - u^2)/2a + (V^2 - 0)/2a = distance.
-			// So (2V^2 - u^2)/2a = distance
-			// So V^2 = a * distance + 0.5u^2
-			float vsquared = (acceleration * totalDistance) + 0.5 * startSpeed * startSpeed;
-			// Calculate accelerate distance from: V^2 = u^2 + 2as
-			accelDistance = max<float>((vsquared - (startSpeed * startSpeed))/(2.0 * acceleration), 0.0);
-			decelDistance = totalDistance - accelDistance;
-			topSpeed = sqrt(vsquared);
-		}
-		else
-		{
-			topSpeed = requestedSpeed;
-		}
+		prev->targetNextSpeed = min<float>(maxStartSpeed, requestedSpeed);
+		DoLookahead(prev);
+		startSpeed = prev->targetNextSpeed;
 	}
 
+	RecalculateMove();
 	state = provisional;
 	return true;
 }
@@ -212,113 +183,78 @@ float DDA::MachineToEndPoint(size_t drive) const
 	return ((float)(endPoint[drive]))/reprap.GetPlatform()->DriveStepsPerUnit(drive);
 }
 
-// Adjust the end speed of this move, if we can.
-// Prior to calling this, the caller has checked that its state is 'provisional'.
-float DDA::AdjustEndSpeed(float targetStartSpeed)
+void DDA::DoLookahead(DDA *laDDA)
 //pre(state == provisional)
 {
-//	debugPrintf("Adjusting, %f\n", targetStartSpeed);
-	// Decide what speed we would really like to start at. There are several possibilities:
-	// 1. If the top speed is already the requested speed, use the requested speed.
-	// 2. Else if this is a deceleration-only move and the previous move is not frozen, we may be able to increase the start speed,
-	//    so use the requested speed again.
-	// 3. Else the start speed must be pinned, so use the lower of the maximum speed we can accelerate to and the requested speed.
-	bool canAdjustPreviousMove = (decelDistance == totalDistance && prev->state == provisional);
-	endSpeed =
-			(topSpeed == requestedSpeed || canAdjustPreviousMove)
-			? requestedSpeed
-			: min<float>(sqrt((startSpeed * startSpeed) + (2 * acceleration * totalDistance)), requestedSpeed);
+//	if (reprap.Debug(moduleDda)) debugPrintf("Adjusting, %f\n", laDDA->targetNextSpeed);
+	unsigned int laDepth = 0;
+	bool goingUp = true;
 
-	// We may need 2 goes at this
-	bool repeat;
-	do
+	for(;;)					// this loop is used to nest lookahead without making recursive calls
 	{
-//		debugPrintf(" Repeat\n");
-		// We may have to make multiple passes, because reducing one of the speeds may solve some problems but actually make matters worse on another axis.
-		bool limited;
-		do
+		bool recurse = false;
+		if (goingUp)
 		{
-//			debugPrintf("  Pass, start=%f end=%f\n", targetStartSpeed, endSpeed);
-			limited = false;
-			for (size_t drive = 0; drive < DRIVES; ++drive)
+			// We have been asked to adjust the end speed of this move to targetStartSpeed
+			if (laDDA->topSpeed == laDDA->requestedSpeed)
 			{
-				const DriveMovement& thisMoveDm = ddm[drive];
-				const DriveMovement& nextMoveDm = next->ddm[drive];
-				if (thisMoveDm.moving || nextMoveDm.moving)
-				{
-					float thisMoveSpeed = thisMoveDm.GetDriveSpeed(endSpeed);
-					float nextMoveSpeed = nextMoveDm.GetDriveSpeed(targetStartSpeed);
-					float idealDeltaV = fabsf(thisMoveSpeed - nextMoveSpeed);
-					float maxDeltaV = reprap.GetPlatform()->ActualInstantDv(drive);
-					if (idealDeltaV > maxDeltaV)
-					{
-						// This drive can't change speed fast enough, so reduce the start and/or end speeds
-						// This algorithm sometimes converges very slowly, requiring many passes.
-						// To ensure it converges at all, and to speed up convergence, we over-adjust the speed to achieve an even lower deltaV.
-						maxDeltaV *= 0.8;
-						if (thisMoveDm.direction == nextMoveDm.direction)
-						{
-							// Drives moving in the same direction, so we must reduce the faster one
-							if (fabsf(thisMoveSpeed) > fabsf(nextMoveSpeed))
-							{
-								endSpeed = (fabsf(nextMoveSpeed) + maxDeltaV)/thisMoveDm.dv;
-							}
-							else
-							{
-								targetStartSpeed = (fabsf(thisMoveSpeed) + maxDeltaV)/nextMoveDm.dv;
-							}
-						}
-						else if (fabsf(thisMoveSpeed) * 2 < maxDeltaV)
-						{
-							targetStartSpeed = (maxDeltaV - fabsf(thisMoveSpeed))/nextMoveDm.dv;
-						}
-						else if (fabsf(nextMoveSpeed) * 2 < maxDeltaV)
-						{
-							endSpeed = (maxDeltaV - fabsf(nextMoveSpeed))/thisMoveDm.dv;
-						}
-						else
-						{
-							targetStartSpeed = maxDeltaV/(2 * nextMoveDm.dv);
-							endSpeed = maxDeltaV/(2 * thisMoveDm.dv);
-						}
-						limited = true;
-						// Most conflicts are between X and Y. So if we just did Y, start another pass immediately to save time.
-						if (drive == 1)
-						{
-							break;
-						}
-					}
-				}
+				// This move already reaches its top speed, so just need to adjust the deceleration part
+				laDDA->endSpeed = laDDA->requestedSpeed;
+				laDDA->CalcNewSpeeds();
 			}
-		} while (limited);
-
-		repeat = false;
-
-		// If we made the assumption that we can increase the end speed of the previous move, see whether we need to do so
-		if (canAdjustPreviousMove)
-		{
-			float maxStartSpeed = min<float>(sqrt((endSpeed * endSpeed) + (2 * acceleration * totalDistance)), requestedSpeed);
-			if (reprap.Debug(moduleDda))
+			else if (laDDA->decelDistance == laDDA->totalDistance && laDDA->prev->state == provisional)
 			{
-				debugPrintf("Recursion start\n");
+				// This move doesn't reach its requested speed, so we may have to adjust the previous move as well to get optimum behaviour
+				laDDA->endSpeed = laDDA->requestedSpeed;
+				laDDA->CalcNewSpeeds();
+				laDDA->prev->targetNextSpeed = min<float>(sqrt((laDDA->endSpeed * laDDA->endSpeed) + (2 * laDDA->acceleration * laDDA->totalDistance)), laDDA->requestedSpeed);
+				recurse = true;
 			}
-			startSpeed = prev->AdjustEndSpeed(maxStartSpeed);		// TODO eliminate this recursive call! (but it's very rare)
-			if (reprap.Debug(moduleDda))
+			else
 			{
-				debugPrintf("Recursion end\n");
-			}
-			float maxEndSpeed = sqrt((startSpeed * startSpeed) + (2 * acceleration * totalDistance));
-			if (maxEndSpeed < endSpeed)
-			{
-				// Oh dear, we were too optimistic! Have another go.
-				endSpeed = maxEndSpeed;
-				canAdjustPreviousMove = false;						// we have already adjusted it as much as we can
-				repeat = true;
+				// This move doesn't reach its requested speed, but we can't adjust the previous one
+				laDDA->endSpeed = min<float>(sqrt((laDDA->startSpeed * laDDA->startSpeed) + (2 * laDDA->acceleration * laDDA->totalDistance)), laDDA->requestedSpeed);
+				laDDA->CalcNewSpeeds();
 			}
 		}
-	} while (repeat);
+		else
+		{
+			laDDA->startSpeed = laDDA->prev->targetNextSpeed;
+			float maxEndSpeed = sqrt((laDDA->startSpeed * laDDA->startSpeed) + (2 * laDDA->acceleration * laDDA->totalDistance));
+			if (maxEndSpeed < laDDA->endSpeed)
+			{
+				// Oh dear, we were too optimistic! Have another go.
+				laDDA->endSpeed = maxEndSpeed;
+				laDDA->CalcNewSpeeds();
+			}
+		}
 
-	// Recalculate this move
+		if (recurse)
+		{
+			laDDA = laDDA->prev;
+			++laDepth;
+			if (reprap.Debug(moduleDda)) debugPrintf("Recursion start %u\n", laDepth);
+		}
+		else
+		{
+			laDDA->RecalculateMove();
+
+			if (laDepth == 0)
+			{
+//				if (reprap.Debug(moduleDda)) debugPrintf("Complete, %f\n", laDDA->targetNextSpeed);
+				return;
+			}
+
+			laDDA = laDDA->next;
+			--laDepth;
+			goingUp = false;
+		}
+	}
+}
+
+// Recalculate the top speed, acceleration distance and deceleration distance
+void DDA::RecalculateMove()
+{
 	accelDistance = ((requestedSpeed * requestedSpeed) - (startSpeed * startSpeed))/(2.0 * acceleration);
 	decelDistance = ((requestedSpeed * requestedSpeed) - (endSpeed * endSpeed))/(2.0 * acceleration);
 	if (accelDistance + decelDistance >= totalDistance)
@@ -348,15 +284,78 @@ float DDA::AdjustEndSpeed(float targetStartSpeed)
 			decelDistance = totalDistance;
 			topSpeed = startSpeed;
 		}
-
 	}
 	else
 	{
 		topSpeed = requestedSpeed;
 	}
+}
 
-//	debugPrintf("Complete, %f\n", targetStartSpeed);
-	return targetStartSpeed;
+void DDA::CalcNewSpeeds()
+{
+	// Decide what speed we would really like to start at. There are several possibilities:
+	// 1. If the top speed is already the requested speed, use the requested speed.
+	// 2. Else if this is a deceleration-only move and the previous move is not frozen, we may be able to increase the start speed,
+	//    so use the requested speed again.
+	// 3. Else the start speed must be pinned, so use the lower of the maximum speed we can accelerate to and the requested speed.
+
+	// We may have to make multiple passes, because reducing one of the speeds may solve some problems but actually make matters worse on another axis.
+	bool limited;
+	do
+	{
+//		debugPrintf("  Pass, start=%f end=%f\n", targetStartSpeed, endSpeed);
+		limited = false;
+		for (size_t drive = 0; drive < DRIVES; ++drive)
+		{
+			const DriveMovement& thisMoveDm = ddm[drive];
+			const DriveMovement& nextMoveDm = next->ddm[drive];
+			if (thisMoveDm.moving || nextMoveDm.moving)
+			{
+				float thisMoveSpeed = thisMoveDm.GetDriveSpeed(endSpeed);
+				float nextMoveSpeed = nextMoveDm.GetDriveSpeed(targetNextSpeed);
+				float idealDeltaV = fabsf(thisMoveSpeed - nextMoveSpeed);
+				float maxDeltaV = reprap.GetPlatform()->ActualInstantDv(drive);
+				if (idealDeltaV > maxDeltaV)
+				{
+					// This drive can't change speed fast enough, so reduce the start and/or end speeds
+					// This algorithm sometimes converges very slowly, requiring many passes.
+					// To ensure it converges at all, and to speed up convergence, we over-adjust the speed to achieve an even lower deltaV.
+					maxDeltaV *= 0.8;
+					if (thisMoveDm.direction == nextMoveDm.direction)
+					{
+						// Drives moving in the same direction, so we must reduce the faster one
+						if (fabsf(thisMoveSpeed) > fabsf(nextMoveSpeed))
+						{
+							endSpeed = (fabsf(nextMoveSpeed) + maxDeltaV)/thisMoveDm.dv;
+						}
+						else
+						{
+							targetNextSpeed = (fabsf(thisMoveSpeed) + maxDeltaV)/nextMoveDm.dv;
+						}
+					}
+					else if (fabsf(thisMoveSpeed) * 2 < maxDeltaV)
+					{
+						targetNextSpeed = (maxDeltaV - fabsf(thisMoveSpeed))/nextMoveDm.dv;
+					}
+					else if (fabsf(nextMoveSpeed) * 2 < maxDeltaV)
+					{
+						endSpeed = (maxDeltaV - fabsf(nextMoveSpeed))/thisMoveDm.dv;
+					}
+					else
+					{
+						targetNextSpeed = maxDeltaV/(2 * nextMoveDm.dv);
+						endSpeed = maxDeltaV/(2 * thisMoveDm.dv);
+					}
+					limited = true;
+					// Most conflicts are between X and Y. So if we just did Y, start another pass immediately to save time.
+					if (drive == 1)
+					{
+						break;
+					}
+				}
+			}
+		}
+	} while (limited);
 }
 
 // Force an end point
@@ -419,43 +418,55 @@ void DDA::Prepare()
 			dm.accelClocksMinusAccelDistanceTimesCdivTopSpeed = (int32_t)accelClocksMinusAccelDistanceTimesCdivTopSpeed - (int32_t)(compensationClocks * compFactor);
 
 			// Deceleration and reverse phase parameters
-			dm.decelStartStep = (uint32_t)((decelStartDistance * dm.stepsPerMm) + accelCompensationSteps) + 1;
-			const int32_t initialDecelSpeedTimesCdivA = (int32_t)topSpeedTimesCdivA - (int32_t)compensationClocks;	// signed because it may be negative and we square it
-			const uint64_t initialDecelSpeedTimesCdivASquared = (int64_t)initialDecelSpeedTimesCdivA * initialDecelSpeedTimesCdivA;
-			dm.topSpeedTimesCdivAPlusDecelStartClocks = topSpeedTimesCdivAPlusDecelStartClocks - compensationClocks;
-			dm.twoDistanceToStopTimesCsquaredDivA =
-				initialDecelSpeedTimesCdivASquared + (uint64_t)(((decelStartDistance + accelCompensationDistance) * (stepClockRateSquared * 2))/acceleration);
-
-			float initialDecelSpeed = topSpeed - acceleration * dm.compensationTime;
-			float reverseStartDistance = (initialDecelSpeed > 0.0) ? initialDecelSpeed * initialDecelSpeed/(2 * acceleration) + decelStartDistance : decelStartDistance;
-
-			// Reverse phase parameters
-			if (reverseStartDistance >= totalDistance)
+			// First check whether there is any deceleration at all, otherwise we may get strange results because of rounding errors
+			if (decelDistance * dm.stepsPerMm < 0.5)
 			{
-				// No reverse phase
 				dm.totalSteps = netSteps;
-				dm.reverseStartStep = netSteps + 1;
+				dm.decelStartStep = dm.reverseStartStep = netSteps + 1;
+				dm.topSpeedTimesCdivAPlusDecelStartClocks = 0;
 				dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA = 0;
+				dm.twoDistanceToStopTimesCsquaredDivA = 0;
 			}
 			else
 			{
-				dm.reverseStartStep = (initialDecelSpeed < 0.0)
-										? dm.decelStartStep
-										: (dm.twoDistanceToStopTimesCsquaredDivA/dm.twoCsquaredTimesMmPerStepDivA) + 1;
-				// Because the step numbers are rounded down, we may sometimes get a situation in which netSteps = 1 and reverseStartStep = 1.
-				// This would lead to totalSteps = -1, which must be avoided.
-				int32_t overallSteps = (int32_t)(2 * (dm.reverseStartStep - 1)) - netSteps;
-				if (overallSteps > 0)
+				dm.decelStartStep = (uint32_t)((decelStartDistance * dm.stepsPerMm) + accelCompensationSteps) + 1;
+				const int32_t initialDecelSpeedTimesCdivA = (int32_t)topSpeedTimesCdivA - (int32_t)compensationClocks;	// signed because it may be negative and we square it
+				const uint64_t initialDecelSpeedTimesCdivASquared = (int64_t)initialDecelSpeedTimesCdivA * initialDecelSpeedTimesCdivA;
+				dm.topSpeedTimesCdivAPlusDecelStartClocks = topSpeedTimesCdivAPlusDecelStartClocks - compensationClocks;
+				dm.twoDistanceToStopTimesCsquaredDivA =
+					initialDecelSpeedTimesCdivASquared + (uint64_t)(((decelStartDistance + accelCompensationDistance) * (stepClockRateSquared * 2))/acceleration);
+
+				float initialDecelSpeed = topSpeed - acceleration * dm.compensationTime;
+				float reverseStartDistance = (initialDecelSpeed > 0.0) ? initialDecelSpeed * initialDecelSpeed/(2 * acceleration) + decelStartDistance : decelStartDistance;
+
+				// Reverse phase parameters
+				if (reverseStartDistance >= totalDistance)
 				{
-					dm.totalSteps = overallSteps;
-					dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA =
-							(int64_t)((2 * (dm.reverseStartStep - 1)) * dm.twoCsquaredTimesMmPerStepDivA) - (int64_t)dm.twoDistanceToStopTimesCsquaredDivA;
+					// No reverse phase
+					dm.totalSteps = netSteps;
+					dm.reverseStartStep = netSteps + 1;
+					dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA = 0;
 				}
 				else
 				{
-					dm.totalSteps = (uint)max<int32_t>(netSteps, 0);
-					dm.reverseStartStep = dm.totalSteps + 1;
-					dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA = 0;
+					dm.reverseStartStep = (initialDecelSpeed < 0.0)
+											? dm.decelStartStep
+											: (dm.twoDistanceToStopTimesCsquaredDivA/dm.twoCsquaredTimesMmPerStepDivA) + 1;
+					// Because the step numbers are rounded down, we may sometimes get a situation in which netSteps = 1 and reverseStartStep = 1.
+					// This would lead to totalSteps = -1, which must be avoided.
+					int32_t overallSteps = (int32_t)(2 * (dm.reverseStartStep - 1)) - netSteps;
+					if (overallSteps > 0)
+					{
+						dm.totalSteps = overallSteps;
+						dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA =
+								(int64_t)((2 * (dm.reverseStartStep - 1)) * dm.twoCsquaredTimesMmPerStepDivA) - (int64_t)dm.twoDistanceToStopTimesCsquaredDivA;
+					}
+					else
+					{
+						dm.totalSteps = (uint)max<int32_t>(netSteps, 0);
+						dm.reverseStartStep = dm.totalSteps + 1;
+						dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA = 0;
+					}
 				}
 			}
 

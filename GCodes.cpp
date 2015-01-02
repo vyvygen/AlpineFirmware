@@ -3197,7 +3197,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
     	}
 		break;
 
-    case 566: // Set/print minimum feedrates
+    case 566: // Set/print maximum jerk speeds
        	{
        		bool seen = false;
         	for(int8_t axis = 0; axis < AXES; axis++)
@@ -3222,13 +3222,12 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
         	}
         	else if(!seen)
         	{
-        		reply.printf("Minimum feedrates: X: %.1f, Y: %.1f, Z: %.1f, E: ",
+        		reply.printf("Maximum jerk rates: X: %.1f, Y: %.1f, Z: %.1f, E: ",
         				platform->ConfiguredInstantDv(X_AXIS)/(distanceScale * secondsToMinutes), platform->ConfiguredInstantDv(Y_AXIS)/(distanceScale * secondsToMinutes),
         				platform->ConfiguredInstantDv(Z_AXIS)/(distanceScale * secondsToMinutes));
             	for(int8_t drive = AXES; drive < DRIVES; drive++)
             	{
-					reply.catf("%.1f%c", platform->ConfiguredInstantDv(drive) / (distanceScale * secondsToMinutes),
-							(drive < DRIVES - 1) ? ':' : '\n');
+					reply.catf("%.1f%c", platform->ConfiguredInstantDv(drive) / (distanceScale * secondsToMinutes), (drive < DRIVES - 1) ? ':' : '\n');
             	}
         	}
        	}
