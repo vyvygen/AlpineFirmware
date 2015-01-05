@@ -504,7 +504,7 @@ int GCodes::SetUpMove(GCodeBuffer *gb)
 		// We have been asked to do a move without delta mapping on a delta machine, but the move is not relative.
 		// This is dangerous and almost certainly a user mistake, so ignore the move.
 		platform->Message(BOTH_ERROR_MESSAGE, "Attempt to move the motors of a delta printer to absolute positions\n");
-		return 0;
+		return 1;
 	}
 
 	// Load the last position and feed rate into moveBuffer; if Move can't accept more, return false
@@ -669,7 +669,6 @@ bool GCodes::SetPositions(GCodeBuffer *gb)
 		reprap.GetMove()->Transform(moveBuffer);
 		reprap.GetMove()->SetLiveCoordinates(moveBuffer);
 		reprap.GetMove()->SetPositions(moveBuffer);
-//		reprap.GetMove()->SetFeedrate(platform->InstantDv(platform->SlowestDrive()));  // On a G92 we must effectively be stationary
 	}
 
 	return true;
@@ -3329,27 +3328,28 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 
 	case 665: // Set delta configuration
 		{
-			float diagonal, radius;
 			Move *move = reprap.GetMove();
-			move->GetDeltaParameters(diagonal, radius);
 			bool seen = false;
 			if (gb->Seen('L'))
 			{
-				diagonal = gb->GetFValue() * distanceScale;
+				move->SetDeltaDiagonal(gb->GetFValue() * distanceScale);
 				seen = true;
 			}
 			if (gb->Seen('R'))
 			{
-				radius = gb->GetFValue() * distanceScale;
+				move->SetDeltaRadius(gb->GetFValue() * distanceScale);
 				seen = true;
 			}
-			if (seen)
+			if (!seen)
 			{
-				move->SetDeltaParameters(diagonal, radius);
-			}
-			else
-			{
-				reply.printf("Delta diagonal: %.1f, delta radius: %.1f\n", diagonal/distanceScale, radius/distanceScale);
+				if (move->IsDeltaMode())
+				{
+					reply.printf("Delta diagonal: %.1f, delta radius: %.1f\n", move->GetDeltaDiagonal()/distanceScale, -(move->GetTowerY(X_AXIS)/distanceScale));
+				}
+				else
+				{
+					reply.printf("Printer is not in delta mode\n");
+				}
 			}
 		}
 		break;

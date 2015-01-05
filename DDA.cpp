@@ -88,7 +88,7 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce)
 	float accelerations[DRIVES];
 	for (size_t drive = 0; drive < DRIVES; drive++)
 	{
-		int32_t ep = EndPointToMachine(drive, nextMove[drive]);
+		int32_t ep = Move::MotorEndPointToMachine(drive, nextMove[drive]);
 		endPoint[drive] = ep;
 		int32_t delta = (drive < AXES) ? ep - positionNow[drive] : ep;
 		normalisedDirectionVector[drive] = (float)delta/reprap.GetPlatform()->DriveStepsPerUnit(drive);
@@ -363,12 +363,6 @@ void DDA::SetDriveCoordinate(int32_t a, size_t drive)
 {
 	endPoint[drive] = a;
 }
-
-/*static*/ int32_t DDA::EndPointToMachine(size_t drive, float coord)
-{
-	return (int32_t)roundf(coord * reprap.GetPlatform()->DriveStepsPerUnit(drive));
-}
-
 
 // The remaining functions are speed-critical, so use full optimisation
 #pragma GCC optimize ("O3")

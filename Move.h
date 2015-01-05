@@ -73,14 +73,19 @@ public:
     static float VectorBoxIntersection(const float v[], // Compute the length that a vector would have to have to...
     		const float box[], int8_t dimensions);		// ...just touch the surface of a hyperbox.
 
-    void GetDeltaParameters(float &diagonal, float &radius) const;
-    void SetDeltaParameters(float diagonal, float radius);
-    const float *GetDeltaEndstopAdjustments() const;
+    float GetDeltaDiagonal() const { return deltaDiagonal; }
+    void SetDeltaDiagonal(float diagonal);
+    float GetTowerX(size_t axis) { return towerX[axis]; }
+    float GetTowerY(size_t axis) { return towerY[axis]; }
+    void SetDeltaRadius(float radius);
+    const float *GetDeltaEndstopAdjustments() const { return deltaEndstopAdjustments; }
     void SetDeltaEndstopAdjustments(float x, float y, float z);
     bool StartNextMove(uint32_t startTime);				// start the next move, returning true if Step() needs to be called immediately
     bool IsDeltaMode() const { return deltaMode; }
 
     void PrintCurrentDda() const;						// For debugging
+
+    static int32_t MotorEndPointToMachine(size_t drive, float coord);
 
 private:
 
@@ -98,41 +103,40 @@ private:
     bool DDARingEmpty() const;							// Anything there?
     bool NoLiveMovement() const;						// Is a move running, or are there any queued?
 
-    static int32_t EndPointToMachine(int8_t drive, float coord);
-
     // These implement the movement list
 
     DDA* volatile currentDda;
     DDA* ddaRingAddPointer;
     DDA* volatile ddaRingGetPointer;
 
-    float lastTime;									// The last time we were called (secs)
-    bool addNoMoreMoves;							// If true, allow no more moves to be added to the look-ahead
-    bool active;									// Are we live and running?
-    float currentFeedrate;							// Err... the current feed rate...
-    volatile float liveCoordinates[DRIVES + 1];		// The last endpoint that the machine moved to
-    int32_t nextMachineEndPoints[DRIVES];			// The next endpoint in machine coordinates (i.e. steps)
-    float xBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The X coordinates of the points on the bed at which to probe
-    float yBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The Y coordinates of the points on the bed at which to probe
-    float zBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The Z coordinates of the points on the bed at which to probe
+    float lastTime;										// The last time we were called (secs)
+    bool addNoMoreMoves;								// If true, allow no more moves to be added to the look-ahead
+    bool active;										// Are we live and running?
+    float currentFeedrate;								// Err... the current feed rate...
+    volatile float liveCoordinates[DRIVES + 1];			// The last endpoint that the machine moved to
+    int32_t nextMachineEndPoints[DRIVES];				// The next endpoint in machine coordinates (i.e. steps)
+    float xBedProbePoints[NUMBER_OF_PROBE_POINTS];		// The X coordinates of the points on the bed at which to probe
+    float yBedProbePoints[NUMBER_OF_PROBE_POINTS];		// The Y coordinates of the points on the bed at which to probe
+    float zBedProbePoints[NUMBER_OF_PROBE_POINTS];		// The Z coordinates of the points on the bed at which to probe
     float baryXBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The X coordinates of the triangle corner points
     float baryYBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The Y coordinates of the triangle corner points
     float baryZBedProbePoints[NUMBER_OF_PROBE_POINTS];	// The Z coordinates of the triangle corner points
-    uint8_t probePointSet[NUMBER_OF_PROBE_POINTS];	// Has the XY of this point been set?  Has the Z been probed?
-    float aX, aY, aC; 								// Bed plane explicit equation z' = z + aX*x + aY*y + aC
-    float tanXY, tanYZ, tanXZ; 						// Axis compensation - 90 degrees + angle gives angle between axes
-    bool identityBedTransform;						// Is the bed transform in operation?
-    float xRectangle, yRectangle;					// The side lengths of the rectangle used for second-degree bed compensation
-    volatile float lastZHit;						// The last Z value hit by the probe
-    bool zProbing;									// Are we bed probing as well as moving?
-    float longWait;									// A long time for things that need to be done occasionally
+    uint8_t probePointSet[NUMBER_OF_PROBE_POINTS];		// Has the XY of this point been set?  Has the Z been probed?
+    float aX, aY, aC; 									// Bed plane explicit equation z' = z + aX*x + aY*y + aC
+    float tanXY, tanYZ, tanXZ; 							// Axis compensation - 90 degrees + angle gives angle between axes
+    bool identityBedTransform;							// Is the bed transform in operation?
+    float xRectangle, yRectangle;						// The side lengths of the rectangle used for second-degree bed compensation
+    volatile float lastZHit;							// The last Z value hit by the probe
+    bool zProbing;										// Are we bed probing as well as moving?
+    float longWait;										// A long time for things that need to be done occasionally
 
-    float lastMachinePosition[DRIVES + 1];
+//    float lastMachinePosition[DRIVES + 1];
 
-    bool deltaMode;
-    float deltaDiagonal;
-    float deltaRadius;
-    float deltaEndstopAdjustments[AXES];
+    bool deltaMode;										// True if this is a delta printer
+    float deltaDiagonal;								// The diagonal rod length, all 3 are assumed to be the same length
+    float towerX[AXES];									// The X coordinate of each tower
+    float towerY[AXES];									// The Y coordinate of each tower
+    float deltaEndstopAdjustments[AXES];				// How much above or below the Z axcios length each endstop is
 };
 
 //******************************************************************************************************

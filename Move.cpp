@@ -75,10 +75,10 @@ void Move::Init()
 
     deltaMode = false;
 	deltaDiagonal = 0.0;
-    deltaRadius = 0.0;
     for (size_t axis = 0; axis < AXES; ++axis)
     {
     	deltaEndstopAdjustments[axis] = 0.0;
+    	towerX[axis] = towerY[axis] = 0.0;
     }
 
 	active = true;
@@ -238,7 +238,6 @@ void Move::Absolute(float v[], int8_t dimensions)
 	}
 }
 
-
 // These are the actual numbers we want in the positions, so don't transform them.
 void Move::SetPositions(float move[])
 {
@@ -247,7 +246,7 @@ void Move::SetPositions(float move[])
 		DDA *lastMove = ddaRingAddPointer->GetPrevious();
 		for (size_t drive = 0; drive < DRIVES; drive++)
 		{
-			float coord = DDA::EndPointToMachine(drive, move[drive]);
+			float coord = MotorEndPointToMachine(drive, move[drive]);
 			lastMove->SetDriveCoordinate(coord, drive);
 			nextMachineEndPoints[drive] = coord;
 		}
@@ -314,7 +313,7 @@ void Move::Diagnostics()
 }
 
 // Returns steps from units (mm) for a particular drive
-int32_t Move::EndPointToMachine(int8_t drive, float coord)
+int32_t Move::MotorEndPointToMachine(size_t drive, float coord)
 {
 	return (int32_t)roundf(coord * reprap.GetPlatform()->DriveStepsPerUnit(drive));
 }
@@ -577,24 +576,26 @@ float Move::SecondDegreeTransformZ(float x, float y) const
 	return (1.0 - x)*(1.0 - y)*zBedProbePoints[0] + x*(1.0 - y)*zBedProbePoints[3] + (1.0 - x)*y*zBedProbePoints[1] + x*y*zBedProbePoints[2];
 }
 
-void Move::GetDeltaParameters(float &diagonal, float &radius) const
-{
-	diagonal = deltaDiagonal;
-	radius = deltaRadius;
-}
-
-void Move::SetDeltaParameters(float diagonal, float radius)
+// Set the delta diagonal rod length. We assume all 3 rods have the same length.
+void Move::SetDeltaDiagonal(float diagonal)
 {
 	deltaDiagonal = diagonal;
-	deltaRadius = radius;
-	deltaMode = (radius != 0.0 && diagonal != 0.0);
+	deltaMode = (diagonal > 0.0);
 }
 
-const float *Move::GetDeltaEndstopAdjustments() const
+// Set the delta radius. We assume the 3 towers are equally spaces around the circle they are on.
+void Move::SetDeltaRadius(float radius)
 {
-	return deltaEndstopAdjustments;
+	const float cos30 = sqrt(3.0)/2.0;
+	towerX[X_AXIS] = 0.0;
+	towerX[Y_AXIS] = radius * cos30;
+	towerX[Z_AXIS] = -(radius * cos30);
+
+	towerY[X_AXIS] = -radius;
+	towerY[Y_AXIS] = towerY[Z_AXIS] = 0.5;
 }
 
+// Set the delta endstop adjustments
 void Move::SetDeltaEndstopAdjustments(float x, float y, float z)
 {
 	deltaEndstopAdjustments[X_AXIS] = x;
@@ -662,7 +663,7 @@ void Move::HitLowStop(size_t drive, DDA* hitDDA)
 			hitPoint = xyzPoint[Z_AXIS];
 		}
 	}
-	int32_t coord = EndPointToMachine(drive, hitPoint);
+	int32_t coord = MotorEndPointToMachine(drive, hitPoint);
 	hitDDA->SetDriveCoordinate(coord, drive);
 	reprap.GetGCodes()->SetAxisIsHomed(drive);
 }
@@ -670,9 +671,16 @@ void Move::HitLowStop(size_t drive, DDA* hitDDA)
 // This is called from the step ISR. Any variables it modifies that are also read by code outside the ISR must be declared 'volatile'.
 void Move::HitHighStop(size_t drive, DDA* hitDDA)
 {
-	int32_t coord = EndPointToMachine(drive, reprap.GetPlatform()->AxisMaximum(drive));
-	hitDDA->SetDriveCoordinate(coord, drive);
-	reprap.GetGCodes()->SetAxisIsHomed(drive);
+	if (drive < AXES)		// should always be true
+	{
+		float position = (deltaMode)
+							? reprap.GetPlatform()->AxisMaximum(Z_AXIS) + deltaEndstopAdjustments[drive]
+							        // this is a delta printer, so the motor is at the maximum Z value, give or take the endstop adjustment
+							: reprap.GetPlatform()->AxisMaximum(drive);
+									// this is a Cartesian printer, so we're at the maximum for this axis
+		hitDDA->SetDriveCoordinate(MotorEndPointToMachine(drive, position), drive);
+		reprap.GetGCodes()->SetAxisIsHomed(drive);
+	}
 }
 
 // Update the current position after an aborted move
