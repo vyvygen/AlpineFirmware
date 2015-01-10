@@ -93,13 +93,13 @@ class GCodes
     void QueueFileToPrint(const char* fileName);						// Open a file of G Codes to run
     void DeleteFile(const char* fileName);								// Does what it says
     bool GetProbeCoordinates(int count, float& x, float& y, float& z) const;	// Get pre-recorded probe coordinates
-    const char* GetCurrentCoordinates() const;							// Get where we are as a string
+    void GetCurrentCoordinates(StringRef& s) const;				// Write where we are into a string
     bool PrintingAFile() const;											// Are we in the middle of printing a file?
     float FractionOfFilePrinted() const;								// Get fraction of file printed
     void Diagnostics();													// Send helpful information out
     bool HaveIncomingData() const;										// Is there something that we have to do?
     bool GetAxisIsHomed(uint8_t axis) const { return axisIsHomed[axis]; } // Is the axis at 0?
-    void SetAxisIsHomed(uint8_t axis) { axisIsHomed[axis] = true; }		// Tell us that the axis is now homes
+    void SetAxisIsHomed(uint8_t axis) { axisIsHomed[axis] = true; }		// Tell us that the axis is now homed
     bool CoolingInverted() const;										// Is the current fan value inverted?
     float GetExtruderPosition(uint8_t extruder) const;					// Get the amount of filament extruded
     void PauseSDPrint();												// Pause the current print from SD card
@@ -117,7 +117,7 @@ class GCodes
     bool HandleGcode(GCodeBuffer* gb);									// Do a G code
     bool HandleMcode(GCodeBuffer* gb);									// Do an M code
     bool HandleTcode(GCodeBuffer* gb);									// Do a T code
-    int SetUpMove(GCodeBuffer* gb);										// Pass a move on to the Move module
+    int SetUpMove(GCodeBuffer* gb, StringRef& reply);					// Pass a move on to the Move module
     bool DoDwell(GCodeBuffer *gb);										// Wait for a bit
     bool DoDwellTime(float dwell);										// Really wait for a bit
     bool HomeCartesian(StringRef& reply, bool& error);					// Home some axes
@@ -152,6 +152,7 @@ class GCodes
     void SetToolHeaters(Tool *tool, float temperature);					// Set all a tool's heaters to the temperature.  For M104...
     bool ChangeTool(int newToolNumber);									// Select a new tool
     bool ToolHeatersAtSetTemperatures(const Tool *tool) const;			// Wait for the heaters associated with the specified tool to reach their set temperatures
+    bool AllAxesAreHomed() const;										// Return true if all axes are homed
 
     Platform* platform;							// The RepRap machine
     bool active;								// Live and running?
@@ -322,6 +323,11 @@ inline bool GCodes::RunConfigurationGCodes()
 inline bool GCodes::CoolingInverted() const
 {
 	return coolingInverted;
+}
+
+inline bool GCodes::AllAxesAreHomed() const
+{
+	return axisIsHomed[X_AXIS] && axisIsHomed[Y_AXIS] && axisIsHomed[Z_AXIS];
 }
 
 #endif

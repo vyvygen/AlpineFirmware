@@ -24,9 +24,11 @@ Licence: GPL
 #define CONFIGURATION_H
 
 #define NAME "RepRapFirmware"
-#define VERSION "0.80d-delta-dc42"
-#define DATE "2015-01-05"
+#define VERSION "0.80e-delta-dc42"
+#define DATE "2015-01-10"
 #define AUTHORS "reprappro, dc42, zpl"
+
+#define FLASH_SAVE_ENABLED	(1)
 
 // Other firmware that we might switch to be compatible with.
 

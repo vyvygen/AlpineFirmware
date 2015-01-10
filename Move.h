@@ -32,8 +32,8 @@ public:
     void Init();										// Start me up
     void Spin();										// Called in a tight loop to keep the class going
     void Exit();										// Shut down
-    void GetCurrentUserPosition(float m[], bool disableDeltaMapping) const;	// Return the position (after all queued moves have been executed) in transformed coords
-    void LiveCoordinates(float m[]) const;				// Gives the last point at the end of the last complete DDA transformed to user coords
+    void GetCurrentUserPosition(float m[DRIVES + 1], bool disableDeltaMapping) const;	// Return the position (after all queued moves have been executed) in transformed coords
+    void LiveCoordinates(float m[DRIVES + 1]);				// Gives the last point at the end of the last complete DDA transformed to user coords
     void Interrupt();									// The hardware's (i.e. platform's)  interrupt should call this.
     void InterruptTime();								// Test function - not used
     bool AllMovesAreFinished();							// Is the look-ahead ring empty?  Stops more moves being added as well.
@@ -41,10 +41,9 @@ public:
     void DoLookAhead();									// Run the look-ahead procedure
     void HitLowStop(size_t drive, DDA* hitDDA);			// What to do when a low endstop is hit
     void HitHighStop(size_t drive, DDA* hitDDA);		// What to do when a high endstop is hit
-    void SetPositions(float move[]);					// Force the coordinates to be these
-    void SetPositionsFromDDA(const DDA *hitDDA);		// Update the coordinates after an aborted move
+    void SetPositions(const float move[DRIVES]);		// Force the coordinates to be these
     void SetFeedrate(float feedRate);					// Sometimes we want to override the feed rate
-    void SetLiveCoordinates(float coords[]);			// Force the live coordinates (see above) to be these
+    void SetLiveCoordinates(const float coords[DRIVES]); // Force the live coordinates (see above) to be these
     void SetXBedProbePoint(int index, float x);			// Record the X coordinate of a probe point
     void SetYBedProbePoint(int index, float y);			// Record the Y coordinate of a probe point
     void SetZBedProbePoint(int index, float z);			// Record the Z coordinate of a probe point
@@ -82,15 +81,19 @@ public:
     void SetDeltaEndstopAdjustments(float x, float y, float z);
     bool StartNextMove(uint32_t startTime);				// start the next move, returning true if Step() needs to be called immediately
     bool IsDeltaMode() const { return deltaMode; }
+    void DeltaTransform(const float machinePos[AXES], int32_t motorPos[AXES]) const;				// Convert Cartesian coordinates to delta motor coordinates
+    void MachineToEndPoint(const int32_t motorPos[], float machinePos[], size_t numDrives) const;	// Convert motor coordinates to machine coordinates
+    void EndPointToMachine(const float coords[], int32_t ep[], size_t numDrives) const;
 
     void PrintCurrentDda() const;						// For debugging
 
-    static int32_t MotorEndPointToMachine(size_t drive, float coord);
+    static int32_t MotorEndPointToMachine(size_t drive, float coord);		// Convert a single motor position to number of steps
+    static float MotorEndpointToPosition(int32_t endpoint, size_t drive);	// Convert number of motor steps to motor position
 
 private:
 
     void BedTransform(float move[]) const;			    // Take a position and apply the bed compensations
-    void GetCurrentMachinePosition(float m[]) const;	// Get the current position in untransformed coords if possible. Return false otherwise
+    void GetCurrentMachinePosition(float m[DRIVES + 1], bool disableDeltaMapping) const;	// Get the current position and feedrate in untransformed coords
     void InverseBedTransform(float move[]) const;	    // Go from a bed-transformed point back to user coordinates
     void AxisTransform(float move[]) const;			    // Take a position and apply the axis-angle compensations
     void InverseAxisTransform(float move[]) const;	    // Go from an axis transformed point back to user coordinates
@@ -103,6 +106,8 @@ private:
     bool DDARingEmpty() const;							// Anything there?
     bool NoLiveMovement() const;						// Is a move running, or are there any queued?
 
+    void InverseDeltaTransform(const int32_t motorPos[AXES], volatile float machinePos[AXES]) const;	// Convert axis motor coordinates to Cartesian
+
     // These implement the movement list
 
     DDA* volatile currentDda;
@@ -113,8 +118,9 @@ private:
     bool addNoMoreMoves;								// If true, allow no more moves to be added to the look-ahead
     bool active;										// Are we live and running?
     float currentFeedrate;								// Err... the current feed rate...
-    volatile float liveCoordinates[DRIVES + 1];			// The last endpoint that the machine moved to
-    int32_t nextMachineEndPoints[DRIVES];				// The next endpoint in machine coordinates (i.e. steps)
+    volatile float liveCoordinates[DRIVES + 1];			// The endpoint that the machine moved to in the last completed move
+    volatile bool liveCoordinatesValid;					// True if the XYZ live coordinates are reliable (the extruder ones always are)
+    volatile int32_t liveEndPoints[AXES];				// The XYZ endpoints of the last completed move in motor coordinates
     float xBedProbePoints[NUMBER_OF_PROBE_POINTS];		// The X coordinates of the points on the bed at which to probe
     float yBedProbePoints[NUMBER_OF_PROBE_POINTS];		// The Y coordinates of the points on the bed at which to probe
     float zBedProbePoints[NUMBER_OF_PROBE_POINTS];		// The Z coordinates of the points on the bed at which to probe
@@ -149,24 +155,6 @@ inline bool Move::DDARingEmpty() const
 inline bool Move::NoLiveMovement() const
 {
 	return currentDda == nullptr && DDARingEmpty();
-}
-
-inline void Move::LiveCoordinates(float m[]) const
-{
-	for(int8_t drive = 0; drive <= DRIVES; drive++)
-	{
-		m[drive] = liveCoordinates[drive];
-	}
-	InverseTransform(m);
-}
-
-// These are the actual numbers that we want to be the coordinates, so don't transform them.
-inline void Move::SetLiveCoordinates(float coords[])
-{
-	for(int8_t drive = 0; drive <= DRIVES; drive++)
-	{
-		liveCoordinates[drive] = coords[drive];
-	}
 }
 
 // To wait until all the current moves in the buffers are

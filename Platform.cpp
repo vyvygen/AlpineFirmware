@@ -20,7 +20,7 @@
  ****************************************************************************************************/
 
 #include "RepRapFirmware.h"
-#include "DueFlashStorage.h"						// comment this out if you don't want to build with Flash support
+#include "DueFlashStorage.h"
 #if LWIP_STATS
 #include "lwip/src/include/lwip/stats.h"
 #endif
@@ -134,7 +134,6 @@ void Platform::Init()
 	SerialUSB.begin(BAUD_RATE);
 	Serial.begin(BAUD_RATE);					// this can't be done in the constructor because the Arduino port initialisation isn't complete at that point
 
-#ifdef DUEFLASHSTORAGE_H
 	DueFlashStorage::init();
 
 # if __cplusplus >= 201103L
@@ -148,7 +147,6 @@ void Platform::Init()
 		BadStaticAssert();
 	}
 # endif
-#endif
 
 	ResetNvData();
 
@@ -178,8 +176,7 @@ void Platform::Init()
 	ARRAY_INIT(directions, DIRECTIONS);
 	ARRAY_INIT(enablePins, ENABLE_PINS);
 	ARRAY_INIT(disableDrives, DISABLE_DRIVES);
-	ARRAY_INIT(lowStopPins, LOW_STOP_PINS);
-	ARRAY_INIT(highStopPins, HIGH_STOP_PINS);
+	ARRAY_INIT(endStopPins, END_STOP_PINS);
 	ARRAY_INIT(maxFeedrates, MAX_FEEDRATES);
 	ARRAY_INIT(accelerations, ACCELERATIONS);
 	ARRAY_INIT(driveStepsPerUnit, DRIVE_STEPS_PER_UNIT);
@@ -237,17 +234,18 @@ void Platform::Init()
 		{
 			pinModeNonDue(enablePins[drive], OUTPUT);
 		}
-		if (lowStopPins[drive] >= 0)
+		if (endStopPins[drive] >= 0)
 		{
-			pinModeNonDue(lowStopPins[drive], INPUT_PULLUP);
-		}
-		if (highStopPins[drive] >= 0)
-		{
-			pinModeNonDue(highStopPins[drive], INPUT_PULLUP);
+			pinModeNonDue(endStopPins[drive], INPUT_PULLUP);
 		}
 		Disable(drive);
 		driveEnabled[drive] = false;
 		SetElasticComp(drive, 0.0);
+		if (drive < AXES)
+		{
+			endStopType[drive] = lowEndStop;		// assume all endstops are low endstops
+			endStopLogicLevel[drive] = true;
+		}
 	}
 
 	for (size_t heater = 0; heater < HEATERS; heater++)
@@ -540,14 +538,14 @@ void Platform::ResetNvData()
 		pp.adcLowOffset = pp.adcHighOffset = 0.0;
 	}
 
-#ifdef DUEFLASHSTORAGE_H
+#if FLASH_SAVE_ENABLED
 	nvData.magic = FlashData::magicValue;
 #endif
 }
 
 void Platform::ReadNvData()
 {
-#ifdef DUEFLASHSTORAGE_H
+#if FLASH_SAVE_ENABLED
 	DueFlashStorage::read(FlashData::nvAddress, &nvData, sizeof(nvData));
 	if (nvData.magic != FlashData::magicValue)
 	{
@@ -562,7 +560,7 @@ void Platform::ReadNvData()
 
 void Platform::WriteNvData()
 {
-#ifdef DUEFLASHSTORAGE_H
+#if FLASH_SAVE_ENABLED
 	DueFlashStorage::write(FlashData::nvAddress, &nvData, sizeof(nvData));
 #else
 	Message(BOTH_ERROR_MESSAGE, "Cannot write non-volatile data, because Flash support has been disabled!");
@@ -571,7 +569,7 @@ void Platform::WriteNvData()
 
 void Platform::SetAutoSave(bool enabled)
 {
-#ifdef DUEFLASHSTORAGE_H
+#if FLASH_SAVE_ENABLED
 	autoSaveEnabled = enabled;
 #else
 	Message(BOTH_ERROR_MESSAGE, "Cannot enable auto-save, because Flash support has been disabled!");
@@ -1036,9 +1034,9 @@ void Platform::GetStackUsage(size_t* currentStack, size_t* maxStack, size_t* nev
 	if (neverUsed) { *neverUsed = stack_lwm - heapend; }
 }
 
-void Platform::ClassReport(const char* className, float &lastTime, uint8_t module)
+void Platform::ClassReport(const char* className, float &lastTime, Module m)
 {
-	if (reprap.Debug(module))
+	if (reprap.Debug(m))
 	{
 		if (Time() - lastTime < LONG_TIME)
 		{
@@ -1126,31 +1124,25 @@ void Platform::SetHeater(size_t heater, float power)
 	analogWriteNonDue(heatOnPins[heater], (HEAT_ON == 0) ? 255 - p : p);
 }
 
-EndStopHit Platform::Stopped(int8_t drive)
+EndStopHit Platform::Stopped(size_t drive)
 {
 	if (nvData.zProbeType > 0 && drive < AXES && nvData.zProbeAxes[drive])
 	{
 		int zProbeVal = ZProbe();
 		int zProbeADValue =
-				(nvData.zProbeType == 3) ?
-						nvData.alternateZProbeParameters.adcValue : nvData.irZProbeParameters.adcValue;
-		if (zProbeVal >= zProbeADValue)
-			return lowHit;
-		else if (zProbeVal * 10 >= zProbeADValue * 9)	// if we are at/above 90% of the target value
-			return lowNear;
-		else
-			return noStop;
+				(nvData.zProbeType == 3) ? nvData.alternateZProbeParameters.adcValue
+					: nvData.irZProbeParameters.adcValue;
+		return (zProbeVal >= zProbeADValue) ? lowHit
+				: (zProbeVal * 10 >= zProbeADValue * 9) ? lowNear	// if we are at/above 90% of the target value
+					: noStop;
 	}
 
-	if (lowStopPins[drive] >= 0)
+	if (endStopPins[drive] >= 0 && endStopType[drive] != noEndStop)
 	{
-		if (digitalReadNonDue(lowStopPins[drive]) == ENDSTOP_HIT)
-			return lowHit;
-	}
-	if (highStopPins[drive] >= 0)
-	{
-		if (digitalReadNonDue(highStopPins[drive]) == ENDSTOP_HIT)
-			return highHit;
+		if (digitalReadNonDue(endStopPins[drive]) == ((endStopLogicLevel[drive]) ? 1 : 0))
+		{
+			return (endStopType[drive] == highEndStop) ? highHit : lowHit;
+		}
 	}
 	return noStop;
 }
@@ -1202,7 +1194,7 @@ void Platform::SetMotorCurrent(byte drive, float current)
 }
 
 
-float Platform::MotorCurrent(byte drive)
+float Platform::MotorCurrent(size_t drive)
 {
 	unsigned short pot;
 	if (drive < 4)
@@ -1302,8 +1294,13 @@ void Platform::Message(char type, const char* message, ...)
 {
 	va_list vargs;
 	va_start(vargs, message);
-	messageString.vprintf(message, vargs);
+	Message(type, message, vargs);
 	va_end(vargs);
+}
+
+void Platform::Message(char type, const char* message, va_list vargs)
+{
+	messageString.vprintf(message, vargs);
 	Message(type, messageString);
 }
 

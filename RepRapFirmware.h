@@ -26,6 +26,12 @@ Licence: GPL
 #include <cfloat>
 #include <cstdarg>
 
+// Module numbers, used for diagnostics and debug
+enum Module
+{
+	modulePlatform = 0, moduleNetwork = 1, moduleWebserver = 2, moduleGcodes = 3, moduleMove = 4, moduleHeat = 5, moduleDda = 6,
+	noModule = 15
+};
 
 // Warn of what's to come, so we can use pointers to classes...
 
@@ -105,9 +111,6 @@ extern StringRef scratchString;
 #include "Heat.h"
 #include "Tool.h"
 #include "Reprap.h"
-
-// Module numbers, used for diagnostics
-const uint8_t modulePlatform = 1, moduleNetwork = 2, moduleWebserver = 3, moduleGcodes = 4, moduleMove = 5, moduleHeat = 6, moduleDda = 7;
 
 // std::min and std::max don't seem to work with this variant of gcc, so define our own ones here
 // We use these only with primitive types, so pass them directly instead of by const reference

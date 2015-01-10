@@ -73,7 +73,7 @@ public:
 
 	DDA(DDA* n);
 
-	bool Init(const float nextMove[], EndstopChecks ce);			// Set up a new move, returning true if it represents real movement
+	bool Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping);	// Set up a new move, returning true if it represents real movement
 	void Init();													// Set up initial positions for machine startup
 	bool Start(uint32_t tim);										// Start executing the DDA, i.e. move the move.
 	bool Step();													// Take one step of the DDA, called by timed interrupt.
@@ -87,12 +87,16 @@ public:
 	DDA* GetNext() const { return next; }
 	DDA* GetPrevious() const { return prev; }
 	int32_t GetTimeLeft() const;
-	float MachineToEndPoint(size_t drive) const;					// Convert a move endpoint to real mm coordinates
+	float GetMotorPosition(size_t drive) const;						// Get the real mm position of a motor
 	void SetStoppedHeight();										// Set the Z height when the sensor has just been triggered
-	const int32_t *MachineCoordinates() const { return endPoint; }	// Get endpoints of a move in machine coordinates
-	void MoveAborted();
+	const int32_t *DriveCoordinates() const { return endPoint; }	// Get endpoints of a move in machine coordinates
 	void SetDriveCoordinate(int32_t a, size_t drive);				// Force an end point
+	void MoveAborted();
 	void SetFeedRate(float rate) { requestedSpeed = rate; }
+	float GetEndCoordinate(size_t drive, bool disableDeltaMapping);
+	bool FetchEndPosition(int32_t ep[DRIVES], float endCoords[AXES]);
+    void SetPositions(const float move[]);								// Force the endpoints to be these
+
 	void DebugPrint() const;
 
 	static uint32_t isqrt(uint64_t num);
@@ -116,6 +120,8 @@ private:
 
 	// These remain the same regardless of how we execute a move
 	int32_t endPoint[DRIVES];  				// Machine coordinates of the endpoint
+	float endCoordinates[AXES];				// The Cartesian coordinates at the end of the move
+	bool endCoordinatesValid;				// True if endCoordinates can be relied on
 	EndstopChecks endStopsToCheck;			// Which endstops we are checking on this move
     float totalDistance;					// How long is the move in hypercuboid distance
 	float acceleration;						// The acceleration to use
@@ -144,5 +150,11 @@ private:
 
 	DriveMovement ddm[DRIVES];				// These describe the state of each drive movement
 };
+
+// Force an end point
+inline void DDA::SetDriveCoordinate(int32_t a, size_t drive)
+{
+	endPoint[drive] = a;
+}
 
 #endif /* DDA_H_ */

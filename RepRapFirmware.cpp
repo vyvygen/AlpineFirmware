@@ -163,7 +163,7 @@ RepRap reprap;
 
 // Do nothing more in the constructor; put what you want in RepRap:Init()
 
-RepRap::RepRap() : active(false), debug(0), stopped(false), currentModule(0), ticksInSpinState(0), resetting(false), fileInfoDetected(false), printStartTime(0.0)
+RepRap::RepRap() : active(false), debug(0), stopped(false), currentModule(noModule), ticksInSpinState(0), resetting(false), fileInfoDetected(false), printStartTime(0.0)
 {
   platform = new Platform();
   network = new Network();
@@ -280,7 +280,7 @@ void RepRap::Spin()
 	ticksInSpinState = 0;
 	heat->Spin();
 
-	currentModule = 0;
+	currentModule = noModule;
 	ticksInSpinState = 0;
 
 	// Keep track of the loop time
@@ -485,7 +485,7 @@ void RepRap::Tick()
 				}
 
 				move->PrintCurrentDda();
-				platform->SoftwareReset(SoftwareResetReason::stuckInSpin + currentModule);
+				platform->SoftwareReset(SoftwareResetReason::stuckInSpin + (unsigned int)currentModule);
 			}
 		}
 	}
@@ -858,9 +858,26 @@ void RepRap::ClearTemperatureFault(int8_t wasDudHeater)
 	}
 }
 
-void RepRap::SetDebug(uint16_t d)
+void RepRap::SetDebug(Module m, bool enable)
 {
-	debug = d;
+	if (enable)
+	{
+		debug |= (1 << m);
+	}
+	else
+	{
+		debug &= ~(1 << m);
+	}
+	PrintDebug();
+}
+
+void RepRap::SetDebug(bool enable)
+{
+	debug = (enable) ? 0xFFFF : 0;
+}
+
+void RepRap::PrintDebug()
+{
 	if (debug != 0)
 	{
 		platform->Message(BOTH_MESSAGE, "Debugging enabled for modules:%s%s%s%s%s%s%s\n",
@@ -939,7 +956,7 @@ size_t StringRef::cat(const char* src)
 
 // Utilities and storage not part of any class
 
-static char scratchStringBuffer[200];		// this is now used only for short messages
+static char scratchStringBuffer[100];		// this is now used only for short messages
 StringRef scratchString(scratchStringBuffer, ARRAY_SIZE(scratchStringBuffer));
 
 // For debug use
@@ -947,9 +964,8 @@ void debugPrintf(const char* fmt, ...)
 {
 	va_list vargs;
 	va_start(vargs, fmt);
-	scratchString.vprintf(fmt, vargs);
+	reprap.GetPlatform()->Message(DEBUG_MESSAGE, fmt, vargs);
 	va_end(vargs);
-	reprap.GetPlatform()->Message(DEBUG_MESSAGE, scratchString);
 }
 
 // String testing

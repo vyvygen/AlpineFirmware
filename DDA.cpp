@@ -67,30 +67,43 @@ void DDA::DebugPrint() const
 	reprap.GetPlatform()->GetLine()->Flush();
 }
 
-// Set up a dummy move at the start of the ring so that Move can find the last move endpoint
+// This is called by Move to initialize all DDAs
 void DDA::Init()
 {
+	// Set the endpoints to zero, because Move asks for them
 	for (size_t drive = 0; drive < DRIVES; ++drive)
 	{
 		endPoint[drive] = 0;
 	}
 	state = empty;
+	endCoordinatesValid = false;
 }
 
 // Set up a real move. Return true if it represents real movement, else false.
-bool DDA::Init(const float nextMove[], EndstopChecks ce)
+bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 {
 	// 1. Compute the new endpoints and the movement vector
+	if (doDeltaMapping)
+	{
+		reprap.GetMove()->DeltaTransform(nextMove, endPoint);			// transform the axis coordinates if on a delta printer
+	}
+
 	bool realMove = false, xyMoving = false;
-	const int32_t *positionNow = prev->MachineCoordinates();
+	const int32_t *positionNow = prev->DriveCoordinates();
 	float normalisedDirectionVector[DRIVES];	// Used to hold a unit-length vector in the direction of motion
 	const float *normalAccelerations = reprap.GetPlatform()->Accelerations();
 	float accelerations[DRIVES];
 	for (size_t drive = 0; drive < DRIVES; drive++)
 	{
-		int32_t ep = Move::MotorEndPointToMachine(drive, nextMove[drive]);
-		endPoint[drive] = ep;
-		int32_t delta = (drive < AXES) ? ep - positionNow[drive] : ep;
+		if (drive < AXES)
+		{
+			endCoordinates[drive] = nextMove[drive];
+		}
+		if (drive >= AXES || !doDeltaMapping)
+		{
+			endPoint[drive] = Move::MotorEndPointToMachine(drive, nextMove[drive]);
+		}
+		int32_t delta = (drive < AXES) ? endPoint[drive] - positionNow[drive] : endPoint[drive];
 		normalisedDirectionVector[drive] = (float)delta/reprap.GetPlatform()->DriveStepsPerUnit(drive);
 		DriveMovement& dm = ddm[drive];
 		dm.moving = (delta != 0);
@@ -129,6 +142,7 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce)
 	// 3. Store some values
 	endStopsToCheck = ce;
 	endSpeed = 0.0;					// until the next move asks us to adjust it
+	endCoordinatesValid = doDeltaMapping;
 
 	// 4. Compute the direction and amount of motion, moved to the positive hyperquadrant
 	Move::Absolute(normalisedDirectionVector, DRIVES);
@@ -178,9 +192,9 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce)
 	return true;
 }
 
-float DDA::MachineToEndPoint(size_t drive) const
+float DDA::GetMotorPosition(size_t drive) const
 {
-	return ((float)(endPoint[drive]))/reprap.GetPlatform()->DriveStepsPerUnit(drive);
+	return Move::MotorEndpointToPosition(endPoint[drive], drive);
 }
 
 void DDA::DoLookahead(DDA *laDDA)
@@ -358,10 +372,48 @@ void DDA::CalcNewSpeeds()
 	} while (limited);
 }
 
-// Force an end point
-void DDA::SetDriveCoordinate(int32_t a, size_t drive)
+bool DDA::FetchEndPosition(int32_t ep[DRIVES], float endCoords[AXES])
 {
-	endPoint[drive] = a;
+	for (size_t drive = 0; drive < DRIVES; ++drive)
+	{
+		ep[drive] = endPoint[drive];
+	}
+	if (endCoordinatesValid)
+	{
+		for (size_t axis = 0; axis < AXES; ++axis)
+		{
+			endCoords[axis] = endCoordinates[axis];
+		}
+	}
+	return endCoordinatesValid;
+}
+
+void DDA::SetPositions(const float move[DRIVES])
+{
+	reprap.GetMove()->EndPointToMachine(move, endPoint, DRIVES);
+	for (size_t axis = 0; axis < AXES; ++axis)
+	{
+		endCoordinates[axis] = move[axis];
+	}
+	endCoordinatesValid = true;
+}
+
+// Get a Cartesian end coordinate from this move
+float DDA::GetEndCoordinate(size_t drive, bool disableDeltaMapping)
+{
+	if (disableDeltaMapping)
+	{
+		return Move::MotorEndpointToPosition(endPoint[drive], drive);
+	}
+	else
+	{
+		if (drive < AXES && !endCoordinatesValid)
+		{
+			reprap.GetMove()->MachineToEndPoint(endPoint, endCoordinates, AXES);
+			endCoordinatesValid = true;
+		}
+		return endCoordinates[drive];
+	}
 }
 
 // The remaining functions are speed-critical, so use full optimisation
@@ -699,7 +751,6 @@ void DDA::MoveAborted()
 			}
 		}
 	}
-	reprap.GetMove()->SetPositionsFromDDA(this);
 	state = completed;
 }
 

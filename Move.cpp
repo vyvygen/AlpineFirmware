@@ -28,12 +28,13 @@ void Move::Init()
 {
 	// Put the origin on the lookahead ring with default velocity in the previous
 	// position to the first one that will be used.
-	for(unsigned int i = 0; i < DRIVES; i++)
+	for (size_t i = 0; i < DRIVES; i++)
 	{
+		liveEndPoints[i] = 0;
 		liveCoordinates[i] = 0.0;
-		nextMachineEndPoints[i] = 0;
 		reprap.GetPlatform()->SetDirection(i, FORWARDS, false);
 	}
+	liveCoordinatesValid = false;
 
 	// Empty the ring
 	ddaRingGetPointer = ddaRingAddPointer;
@@ -115,13 +116,13 @@ void Move::Spin()
 			{
 				Transform(nextMove);
 			}
-			if (ddaRingAddPointer->Init(nextMove, endStopsToCheck))
+			if (ddaRingAddPointer->Init(nextMove, endStopsToCheck, deltaMode && !noDeltaMapping))
 			{
-				const int32_t* machineCoords = ddaRingAddPointer->MachineCoordinates();
-				for (size_t drive = 0; drive < DRIVES; ++drive)
-				{
-					nextMachineEndPoints[drive] = machineCoords[drive];
-				}
+//				const int32_t* machineCoords = ddaRingAddPointer->MachineCoordinates();
+//				for (size_t drive = 0; drive < DRIVES; ++drive)
+//				{
+//					nextMachineEndPoints[drive] = machineCoords[drive];
+//				}
 				ddaRingAddPointer = ddaRingAddPointer->GetNext();
 			}
 		}
@@ -238,39 +239,6 @@ void Move::Absolute(float v[], int8_t dimensions)
 	}
 }
 
-// These are the actual numbers we want in the positions, so don't transform them.
-void Move::SetPositions(float move[])
-{
-	if (DDARingEmpty())
-	{
-		DDA *lastMove = ddaRingAddPointer->GetPrevious();
-		for (size_t drive = 0; drive < DRIVES; drive++)
-		{
-			float coord = MotorEndPointToMachine(drive, move[drive]);
-			lastMove->SetDriveCoordinate(coord, drive);
-			nextMachineEndPoints[drive] = coord;
-		}
-	}
-	else
-	{
-		reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "SetPositions called when DDA ring not empty\n");
-	}
-}
-
-void Move::SetFeedrate(float feedRate)
-{
-	if (DDARingEmpty())
-	{
-		DDA *lastMove = ddaRingAddPointer->GetPrevious();
-		currentFeedrate = feedRate;
-		lastMove->SetFeedRate(feedRate);
-	}
-	else
-	{
-		reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "SetFeedrate called when DDA ring not empty\n");
-	}
-}
-
 uint32_t maxStepTime=0, maxCalcTime=0, minCalcTime = 999, maxReps = 0, sqrtErrors = 0, lastRes = 0; uint64_t lastNum = 0;	//DEBUG
 
 void Move::Diagnostics()
@@ -312,10 +280,78 @@ void Move::Diagnostics()
 #endif
 }
 
+// These are the actual numbers we want in the positions, so don't transform them.
+void Move::SetPositions(const float move[DRIVES])
+{
+	if (DDARingEmpty())
+	{
+		ddaRingAddPointer->GetPrevious()->SetPositions(move);
+	}
+	else
+	{
+		reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "SetPositions called when DDA ring not empty\n");
+	}
+}
+
+void Move::EndPointToMachine(const float coords[], int32_t ep[], size_t numDrives) const
+{
+	if (deltaMode)
+	{
+		DeltaTransform(coords, ep);
+		for (size_t drive = AXES; drive < numDrives; ++drive)
+		{
+			ep[drive] = MotorEndPointToMachine(drive, coords[drive]);
+		}
+	}
+	else
+	{
+		for (size_t drive = 0; drive < DRIVES; drive++)
+		{
+			ep[drive] = MotorEndPointToMachine(drive, coords[drive]);
+		}
+	}
+
+}
+
+void Move::SetFeedrate(float feedRate)
+{
+	if (DDARingEmpty())
+	{
+		DDA *lastMove = ddaRingAddPointer->GetPrevious();
+		currentFeedrate = feedRate;
+		lastMove->SetFeedRate(feedRate);
+	}
+	else
+	{
+		reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "SetFeedrate called when DDA ring not empty\n");
+	}
+}
+
 // Returns steps from units (mm) for a particular drive
 int32_t Move::MotorEndPointToMachine(size_t drive, float coord)
 {
 	return (int32_t)roundf(coord * reprap.GetPlatform()->DriveStepsPerUnit(drive));
+}
+
+// Convert motor coordinates to machine coordinates
+// This is computationally expensive on a delta, so only call it when necessary, and never from the step ISR.
+void Move::MachineToEndPoint(const int32_t motorPos[DRIVES], float machinePos[DRIVES], size_t numDrives) const
+{
+	if (deltaMode)
+	{
+		InverseDeltaTransform(motorPos, machinePos);			// convert the axes
+		for (size_t drive = AXES; drive < numDrives; ++drive)
+		{
+			machinePos[drive] = MotorEndpointToPosition(motorPos[drive], drive);
+		}
+	}
+	else
+	{
+		for (size_t drive = 0; drive < numDrives; ++drive)
+		{
+			machinePos[drive] = MotorEndpointToPosition(motorPos[drive], drive);
+		}
+	}
 }
 
 // Do the Axis transform BEFORE the bed transform
@@ -397,6 +433,77 @@ void Move::InverseBedTransform(float xyzPoint[]) const
 		default:
 			reprap.GetPlatform()->Message(BOTH_ERROR_MESSAGE, "InverseBedTransform: wrong number of sample points.");
 		}
+	}
+}
+
+// Convert motor step positions to Cartesian machine coordinates.
+// Used after homing and after individual motor moves.
+// Because this is computationally expensive, we only call it when necessary, and never from the step ISR.
+void Move::InverseDeltaTransform(const int32_t motorPos[AXES], volatile float machinePos[AXES]) const
+{
+	const float Ha = MotorEndpointToPosition(motorPos[A_AXIS], A_AXIS);
+	const float Hb = MotorEndpointToPosition(motorPos[B_AXIS], B_AXIS);
+	const float Hc = MotorEndpointToPosition(motorPos[C_AXIS], C_AXIS);
+
+	const float Fa = square(towerX[A_AXIS]) + square(towerY[A_AXIS]) + square(Ha);
+	const float Fb = square(towerX[B_AXIS]) + square(towerY[B_AXIS]) + square(Hb);
+	const float Fc = square(towerX[C_AXIS]) + square(towerY[C_AXIS]) + square(Hc);
+
+	const float Xbc = towerX[C_AXIS] - towerX[B_AXIS];
+	const float Xca = towerX[A_AXIS] - towerX[C_AXIS];
+	const float Xab = towerX[B_AXIS] - towerX[A_AXIS];
+
+	const float Ybc = towerY[C_AXIS] - towerY[B_AXIS];
+	const float Yca = towerY[A_AXIS] - towerY[C_AXIS];
+	const float Yab = towerY[B_AXIS] - towerY[A_AXIS];
+
+//	debugPrintf("Ha=%f Hb=%f Hc=%f Fa=%f Fb=%f Fc=%f Xbc=%f Xca=%f Xab=%f Ybc=%f Yca=%f Yab=%f\n",
+//				Ha, Hb, Hc, Fa, Fb, Fc, Xbc, Xca, Xab, Ybc, Yca, Yab);
+
+	// Setup PQRSU such that x = -(S - uz)/P, y = (P - Rz)/Q
+	const float P = (Xbc * Fa) + (Xca * Fb) + (Xab * Fc);
+	const float S = (Ybc * Fa) + (Yca * Fb) + (Yab * Fc);
+
+	const float R = 2 * ((Xbc * Ha) + (Xca * Hb) + (Xab * Hc));
+	const float U = 2 * ((Ybc * Ha) + (Yca * Hb) + (Yab * Hc));
+
+	const float Q = 2 * (Xca * Yab - Xab * Yca);
+
+//	debugPrintf("P= %f R=%f S=%f U=%f Q=%f\n", P, R, S, U, Q);
+
+	const float Q2 = square(Q), R2 = square(R), U2 = square(U);
+
+	float A = U2 + R2 + Q2;
+	float minusHalfB = S * U + P * R + Ha * Q2 + towerX[A_AXIS] * U * Q - towerY[A_AXIS] * R * Q;
+	float C = square(S + towerX[A_AXIS] * Q) + square(P - towerY[A_AXIS] * Q) + (square(Ha) - square(deltaDiagonal)) * Q2;
+
+//	debugPrintf("A=%f minusHalfB=%f C=%f\n", A, minusHalfB, C);
+
+	float z = (minusHalfB - sqrt(square(minusHalfB) - A * C)) / A;
+	machinePos[X_AXIS] = (U * z - S) / Q;
+	machinePos[Y_AXIS] = (P - R * z) / Q;
+	machinePos[Z_AXIS] = z;
+
+	//DEBUG#
+	if (reprap.Debug(moduleMove))
+	{
+		debugPrintf("Inverse transformed %d %d %d to %f %f %f\n", motorPos[0], motorPos[1], motorPos[2], machinePos[0], machinePos[1], machinePos[2]);
+	}
+//	int32_t temp[AXES];
+//	DeltaTransform(const_cast<float *>(machinePos), temp);
+}
+
+// Convert Cartesian coordinates to delta motor steps
+void Move::DeltaTransform(const float machinePos[AXES], int32_t motorPos[AXES]) const
+{
+	for (size_t axis = 0; axis < AXES; ++axis)
+	{
+		motorPos[axis] = MotorEndPointToMachine(axis,
+							machinePos[Z_AXIS] + sqrt(square(deltaDiagonal) - square(machinePos[X_AXIS] - towerX[axis]) - square(machinePos[Y_AXIS] - towerY[axis])));
+	}
+	if (reprap.Debug(moduleMove))
+	{
+		debugPrintf("Transformed %f %f %f to %d %d %d\n", machinePos[0], machinePos[1], machinePos[2], motorPos[0], motorPos[1], motorPos[2]);
 	}
 }
 
@@ -587,12 +694,14 @@ void Move::SetDeltaDiagonal(float diagonal)
 void Move::SetDeltaRadius(float radius)
 {
 	const float cos30 = sqrt(3.0)/2.0;
-	towerX[X_AXIS] = 0.0;
-	towerX[Y_AXIS] = radius * cos30;
-	towerX[Z_AXIS] = -(radius * cos30);
+	const float sin30 = 0.5;
 
-	towerY[X_AXIS] = -radius;
-	towerY[Y_AXIS] = towerY[Z_AXIS] = 0.5;
+	towerX[A_AXIS] = -(radius * cos30);
+	towerX[B_AXIS] = radius * cos30;
+	towerX[C_AXIS] = 0.0;
+
+	towerY[A_AXIS] = towerY[B_AXIS] = -(radius * sin30);
+	towerY[C_AXIS] = radius;
 }
 
 // Set the delta endstop adjustments
@@ -617,10 +726,9 @@ bool Move::StartNextMove(uint32_t startTime)
 {
 	if (currentDda != nullptr)
 	{
-		for (size_t i = 0; i < DRIVES; ++i)
-		{
-			liveCoordinates[i] = currentDda->MachineToEndPoint(i);
-		}
+		// Save the current motor coordinates, and the machine Cartesian coordinates if known
+		liveCoordinatesValid = currentDda->FetchEndPosition(const_cast<int32_t*>(liveEndPoints), const_cast<float *>(liveCoordinates));
+
 		currentDda->Release();
 		currentDda = nullptr;
 		ddaRingGetPointer = ddaRingGetPointer->GetNext();
@@ -647,7 +755,7 @@ void Move::HitLowStop(size_t drive, DDA* hitDDA)
 		{
 			// Executing G32 and Z-axis has already been homed, so record the Z position at which we hit the end stop
 			hitDDA->SetStoppedHeight();
-			lastZHit = hitDDA->MachineToEndPoint(drive) - reprap.GetPlatform()->ZProbeStopHeight();
+			lastZHit = hitDDA->GetMotorPosition(drive) - reprap.GetPlatform()->ZProbeStopHeight();
 			return;
 		}
 		else
@@ -683,42 +791,63 @@ void Move::HitHighStop(size_t drive, DDA* hitDDA)
 	}
 }
 
-// Update the current position after an aborted move
-void Move::SetPositionsFromDDA(const DDA *hitDDA)
-{
-	const int32_t* pos = hitDDA->MachineCoordinates();
-	for (size_t i = 0; i < AXES; ++i)
-	{
-		nextMachineEndPoints[i] = pos[i];
-	}
-}
-
 // Return the untransformed machine coordinates
-void Move::GetCurrentMachinePosition(float m[]) const
+void Move::GetCurrentMachinePosition(float m[DRIVES + 1], bool disableDeltaMapping) const
 {
+	DDA *lastQueuedMove = ddaRingAddPointer->GetPrevious();
 	for (size_t i = 0; i < DRIVES; i++)
 	{
 		if (i < AXES)
 		{
-			m[i] = ((float)nextMachineEndPoints[i])/reprap.GetPlatform()->DriveStepsPerUnit(i);
+			m[i] = lastQueuedMove->GetEndCoordinate(i, disableDeltaMapping);
 		}
 		else
 		{
-			m[i] = 0.0; //FIXME This resets extruders to 0.0, even the inactive ones (is this behaviour desired?)
-			//m[i] = lastMove->MachineToEndPoint(i); //FIXME TEST alternative that does not reset extruders to 0
+			m[i] = 0.0;
 		}
 	}
 	m[DRIVES] = currentFeedrate;
 }
 
-// Return the transformed machine coordinates
-void Move::GetCurrentUserPosition(float m[], bool disableDeltaMapping) const
+/*static*/ float Move::MotorEndpointToPosition(int32_t endpoint, size_t drive)
 {
-	GetCurrentMachinePosition(m);
-	if (!disableDeltaMapping || !deltaMode)
+	return ((float)(endpoint))/reprap.GetPlatform()->DriveStepsPerUnit(drive);
+}
+
+// Return the transformed machine coordinates
+void Move::GetCurrentUserPosition(float m[DRIVES + 1], bool disableDeltaMapping) const
+{
+	GetCurrentMachinePosition(m, disableDeltaMapping);
+	if (!disableDeltaMapping)
 	{
 		InverseTransform(m);
 	}
+}
+
+// Return the current live XYZ and extruder coordinates
+void Move::LiveCoordinates(float m[DRIVES + 1])
+{
+	if (!liveCoordinatesValid)
+	{
+		MachineToEndPoint(const_cast<const int32_t *>(liveEndPoints), const_cast<float *>(liveCoordinates), AXES);
+		liveCoordinatesValid = true;
+	}
+	for(size_t drive = 0; drive <= DRIVES; drive++)
+	{
+		m[drive] = liveCoordinates[drive];
+	}
+	InverseTransform(m);
+}
+
+// These are the actual numbers that we want to be the coordinates, so don't transform them.
+void Move::SetLiveCoordinates(const float coords[])
+{
+	for(size_t drive = 0; drive <= DRIVES; drive++)
+	{
+		liveCoordinates[drive] = coords[drive];
+	}
+	liveCoordinatesValid = true;
+	EndPointToMachine(coords, const_cast<int32_t *>(liveEndPoints), AXES);
 }
 
 void Move::SetXBedProbePoint(int index, float x)
