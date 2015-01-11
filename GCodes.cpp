@@ -456,10 +456,9 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 	{
 		// Constrain the move to be within the build radius
 		float diagonalSquared = square(moveBuffer[X_AXIS]) + square(moveBuffer[Y_AXIS]);
-		float printRadiusSquared = square(platform->GetPrintRadius());
-		if (diagonalSquared > printRadiusSquared)
+		if (diagonalSquared > reprap.GetMove()->GetDeltaParams().GetPrintRadiusSquared())
 		{
-			float factor = sqrt(printRadiusSquared/diagonalSquared);
+			float factor = sqrt(reprap.GetMove()->GetDeltaParams().GetPrintRadiusSquared()/diagonalSquared);
 			moveBuffer[X_AXIS] *= factor;
 			moveBuffer[Y_AXIS] *= factor;
 		}
@@ -2648,9 +2647,9 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 //		break;
 
 	case 190: // Deprecated...
-		if(gb->Seen('S'))
+		if (gb->Seen('S'))
 		{
-			if(HOT_BED >= 0)
+			if (HOT_BED >= 0)
 			{
 				reprap.GetHeat()->SetActiveTemperature(HOT_BED, gb->GetFValue());
 				reprap.GetHeat()->Activate(HOT_BED);
@@ -2666,7 +2665,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 	case 201: // Set/print axis accelerations  FIXME - should these be in /min not /sec ?
 		{
 			bool seen = false;
-			for(int8_t axis = 0; axis < AXES; axis++)
+			for (size_t axis = 0; axis < AXES; axis++)
 			{
 				if(gb->Seen(axisLetters[axis]))
 				{
@@ -2675,7 +2674,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 				}
 			}
 
-			if(gb->Seen(extrudeLetter))
+			if (gb->Seen(extrudeLetter))
 			{
 				seen = true;
 				float eVals[DRIVES-AXES];
@@ -2687,12 +2686,12 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 				}
 			}
 
-			if(!seen)
+			if (!seen)
 			{
 				reply.printf("Accelerations: X: %.1f, Y: %.1f, Z: %.1f, E: ",
 						platform->Acceleration(X_AXIS)/distanceScale, platform->Acceleration(Y_AXIS)/distanceScale,
 						platform->Acceleration(Z_AXIS)/distanceScale);
-				for(int8_t drive = AXES; drive < DRIVES; drive++)
+				for (size_t drive = AXES; drive < DRIVES; drive++)
 				{
 					reply.catf("%.1f", platform->Acceleration(drive)/distanceScale);
 					if(drive < DRIVES-1)
@@ -2708,7 +2707,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
     case 203: // Set/print maximum feedrates
        	{
        		bool seen = false;
-			for(int8_t axis = 0; axis < AXES; axis++)
+			for (size_t axis = 0; axis < AXES; axis++)
 			{
 				if(gb->Seen(axisLetters[axis]))
 				{
@@ -2717,27 +2716,27 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 				}
 			}
 
-			if(gb->Seen(extrudeLetter))
+			if (gb->Seen(extrudeLetter))
 			{
 				seen = true;
 				float eVals[DRIVES-AXES];
 				int eCount = DRIVES-AXES;
 				gb->GetFloatArray(eVals, eCount);
-				for(int8_t e = 0; e < eCount; e++)
+				for(size_t e = 0; e < eCount; e++)
 				{
 					platform->SetMaxFeedrate(AXES + e, eVals[e] * distanceScale * secondsToMinutes);
 				}
 			}
 
-			if(!seen)
+			if (!seen)
 			{
 				reply.printf("Maximum feedrates: X: %.1f, Y: %.1f, Z: %.1f, E: ",
 						platform->MaxFeedrate(X_AXIS)/(distanceScale * secondsToMinutes), platform->MaxFeedrate(Y_AXIS)/(distanceScale * secondsToMinutes),
 						platform->MaxFeedrate(Z_AXIS)/(distanceScale * secondsToMinutes));
-				for(int8_t drive = AXES; drive < DRIVES; drive++)
+				for(size_t drive = AXES; drive < DRIVES; drive++)
 				{
 					reply.catf("%.1f", platform->MaxFeedrate(drive)/(distanceScale * secondsToMinutes));
-					if(drive < DRIVES-1)
+					if (drive < DRIVES-1)
 					{
 						reply.cat(":");
 					}
@@ -2759,7 +2758,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 		{
 			bool setMin = (gb->Seen('S') ? (gb->GetIValue() == 1): false);
 			bool seen = false;
-			for (int8_t axis = 0; axis < AXES; axis++)
+			for (size_t axis = 0; axis < AXES; axis++)
 			{
 				if (gb->Seen(axisLetters[axis]))
 				{
@@ -2776,31 +2775,17 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 				}
 			}
 
-			if (!setMin && gb->Seen('R'))
-			{
-				platform->SetPrintRadius(gb->GetFValue() * distanceScale);
-				seen = true;
-			}
-
 			if (!seen)
 			{
-				if (reprap.GetMove()->IsDeltaMode())
+				reply.copy("Axis limits - ");
+				char comma = ',';
+				for (size_t axis = 0; axis < AXES; axis++)
 				{
-					reply.printf("Print radius: %.1f, max Z: %.1f\n", platform->GetPrintRadius()/distanceScale, platform->AxisMaximum(Z_AXIS));
-				}
-				else
-				{
-					reply.copy("Axis limits - ");
-					char comma = ',';
-					for(int8_t axis = 0; axis < AXES; axis++)
+					if(axis == AXES - 1)
 					{
-						if(axis == AXES - 1)
-						{
-							comma = '\n';
-						}
-						reply.catf("%c: %.1f min, %.1f max%c ", axisLetters[axis],
-								platform->AxisMinimum(axis), platform->AxisMaximum(axis), comma);
+						comma = '\n';
 					}
+					reply.catf("%c: %.1f min, %.1f max%c ", axisLetters[axis], platform->AxisMinimum(axis), platform->AxisMaximum(axis), comma);
 				}
 			}
 		}
@@ -2809,7 +2794,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 	case 210: // Set/print homing feed rates
 		{
 			bool seen = false;
-			for (int8_t axis = 0; axis < AXES; axis++)
+			for (size_t axis = 0; axis < AXES; axis++)
 			{
 				if (gb->Seen(axisLetters[axis]))
 				{
@@ -2823,7 +2808,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			{
 				reply.copy("Homing feedrates (mm/min) - ");
 				char comma = ',';
-				for(int8_t axis = 0; axis < AXES; axis++)
+				for(size_t axis = 0; axis < AXES; axis++)
 				{
 					if(axis == AXES - 1)
 					{
@@ -3379,23 +3364,35 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 
 	case 665: // Set delta configuration
 		{
-			Move *move = reprap.GetMove();
+			DeltaParameters& params = reprap.GetMove()->AccessDeltaParams();
 			bool seen = false;
 			if (gb->Seen('L'))
 			{
-				move->SetDeltaDiagonal(gb->GetFValue() * distanceScale);
+				params.SetDiagonal(gb->GetFValue() * distanceScale);
 				seen = true;
 			}
 			if (gb->Seen('R'))
 			{
-				move->SetDeltaRadius(gb->GetFValue() * distanceScale);
+				params.SetRadius(gb->GetFValue() * distanceScale);
+				seen = true;
+			}
+			if (gb->Seen('B'))
+			{
+				params.SetPrintRadius(gb->GetFValue() * distanceScale);
+				seen = true;
+			}
+			if (gb->Seen('H'))
+			{
+				params.SetDeltaHomedHeight(gb->GetFValue() * distanceScale);
 				seen = true;
 			}
 			if (!seen)
 			{
-				if (move->IsDeltaMode())
+				if (params.IsDeltaMode())
 				{
-					reply.printf("Delta diagonal: %.1f, delta radius: %.1f\n", move->GetDeltaDiagonal()/distanceScale, -(move->GetTowerY(X_AXIS)/distanceScale));
+					reply.printf("Delta diagonal: %.1f, delta radius: %.1f, homed height: %.1f, bed radius: %1f\n",
+							params.GetDiagonal()/distanceScale, params.GetRadius()/distanceScale,
+							params.GetHomedHeight()/distanceScale, params.GetPrintRadius()/distanceScale);
 				}
 				else
 				{
@@ -3407,34 +3404,27 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 
 	case 666: // Set delta endstop adjustments
 	{
-		Move *move = reprap.GetMove();
-		const float *endstopAdjustments = move->GetDeltaEndstopAdjustments();
-		float x = endstopAdjustments[X_AXIS];
-		float y = endstopAdjustments[Y_AXIS];
-		float z = endstopAdjustments[Z_AXIS];
+		DeltaParameters& params = reprap.GetMove()->AccessDeltaParams();
 		bool seen = false;
 		if (gb->Seen('X'))
 		{
-			x = gb->GetFValue();
+			params.SetEndstopAdjustment(gb->GetFValue(), X_AXIS);
 			seen = true;
 		}
 		if (gb->Seen('Y'))
 		{
-			y = gb->GetFValue();
+			params.SetEndstopAdjustment(gb->GetFValue(), Y_AXIS);
 			seen = true;
 		}
 		if (gb->Seen('Z'))
 		{
-			z = gb->GetFValue();
+			params.SetEndstopAdjustment(gb->GetFValue(), Z_AXIS);
 			seen = true;
 		}
-		if (seen)
+		if (!seen)
 		{
-			move->SetDeltaEndstopAdjustments(x, y, z);
-		}
-		else
-		{
-			reply.printf("Endstop adjustments X: %.1f Y: %.1f Z: %.1f\n", x, y, z);
+			reply.printf("Endstop adjustments X: %.1f Y: %.1f Z: %.1f\n",
+							params.GetEndstopAdjustment(X_AXIS), params.GetEndstopAdjustment(Y_AXIS), params.GetEndstopAdjustment(Z_AXIS));
 		}
 	}
 		break;

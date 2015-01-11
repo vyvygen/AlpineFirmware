@@ -7,6 +7,97 @@
 
 #include "RepRapFirmware.h"
 
+DeltaParameters::DeltaParameters()
+{
+    deltaMode = false;
+	diagonal = 0.0;
+	radius = 0.0;
+	printRadius = defaultPrintRadius;
+	homedHeight = defaultDeltaHomedHeight;
+
+    for (size_t axis = 0; axis < AXES; ++axis)
+    {
+    	endstopAdjustments[axis] = 0.0;
+    	towerX[axis] = towerY[axis] = 0.0;
+    }
+}
+
+void DeltaParameters::SetRadius(float r)
+{
+	radius = r;
+
+	const float cos30 = sqrt(3.0)/2.0;
+	const float sin30 = 0.5;
+
+	towerX[A_AXIS] = -(r * cos30);
+	towerX[B_AXIS] = r * cos30;
+	towerX[C_AXIS] = 0.0;
+
+	towerY[A_AXIS] = towerY[B_AXIS] = -(r * sin30);
+	towerY[C_AXIS] = r;
+
+	Recalc();
+}
+
+void DeltaParameters::Recalc()
+{
+	deltaMode = (radius > 0.0 && diagonal > radius);
+	if (deltaMode)
+	{
+		homedCarriageHeight = homedHeight + sqrt(square(diagonal) - square(radius));
+		Xbc = towerX[C_AXIS] - towerX[B_AXIS];
+		Xca = towerX[A_AXIS] - towerX[C_AXIS];
+		Xab = towerX[B_AXIS] - towerX[A_AXIS];
+		Ybc = towerY[C_AXIS] - towerY[B_AXIS];
+		Yca = towerY[A_AXIS] - towerY[C_AXIS];
+		Yab = towerY[B_AXIS] - towerY[A_AXIS];
+		coreFa = square(towerX[A_AXIS]) + square(towerY[A_AXIS]);
+		coreFb = square(towerX[B_AXIS]) + square(towerY[B_AXIS]);
+		coreFc = square(towerX[C_AXIS]) + square(towerY[C_AXIS]);
+		Q = 2 * (Xca * Yab - Xab * Yca);
+		Q2 = square(Q);
+	}
+}
+
+// Calculate the motor position for a single tower from a Cartesian coordinate
+float DeltaParameters::Transform(const float machinePos[AXES], size_t axis) const
+{
+	return machinePos[Z_AXIS]
+	+ sqrt(square(diagonal) - square(machinePos[X_AXIS] - towerX[axis]) - square(machinePos[Y_AXIS] - towerY[axis]));
+}
+
+void DeltaParameters::InverseTransform(float Ha, float Hb, float Hc, float machinePos[]) const
+{
+	const float Fa = coreFa + square(Ha);
+	const float Fb = coreFb + square(Hb);
+	const float Fc = coreFc + square(Hc);
+
+//	debugPrintf("Ha=%f Hb=%f Hc=%f Fa=%f Fb=%f Fc=%f Xbc=%f Xca=%f Xab=%f Ybc=%f Yca=%f Yab=%f\n",
+//				Ha, Hb, Hc, Fa, Fb, Fc, Xbc, Xca, Xab, Ybc, Yca, Yab);
+
+	// Setup PQRSU such that x = -(S - uz)/P, y = (P - Rz)/Q
+	const float P = (Xbc * Fa) + (Xca * Fb) + (Xab * Fc);
+	const float S = (Ybc * Fa) + (Yca * Fb) + (Yab * Fc);
+
+	const float R = 2 * ((Xbc * Ha) + (Xca * Hb) + (Xab * Hc));
+	const float U = 2 * ((Ybc * Ha) + (Yca * Hb) + (Yab * Hc));
+
+//	debugPrintf("P= %f R=%f S=%f U=%f Q=%f\n", P, R, S, U, Q);
+
+	const float R2 = square(R), U2 = square(U);
+
+	float A = U2 + R2 + Q2;
+	float minusHalfB = S * U + P * R + Ha * Q2 + towerX[A_AXIS] * U * Q - towerY[A_AXIS] * R * Q;
+	float C = square(S + towerX[A_AXIS] * Q) + square(P - towerY[A_AXIS] * Q) + (square(Ha) - square(diagonal)) * Q2;
+
+//	debugPrintf("A=%f minusHalfB=%f C=%f\n", A, minusHalfB, C);
+
+	float z = (minusHalfB - sqrt(square(minusHalfB) - A * C)) / A;
+	machinePos[X_AXIS] = (U * z - S) / Q;
+	machinePos[Y_AXIS] = (P - R * z) / Q;
+	machinePos[Z_AXIS] = z;
+}
+
 Move::Move(Platform* p, GCodes* g) : currentDda(NULL)
 {
 	active = false;
@@ -74,14 +165,6 @@ void Move::Init()
 	lastTime = reprap.GetPlatform()->Time();
 	longWait = lastTime;
 
-    deltaMode = false;
-	deltaDiagonal = 0.0;
-    for (size_t axis = 0; axis < AXES; ++axis)
-    {
-    	deltaEndstopAdjustments[axis] = 0.0;
-    	towerX[axis] = towerY[axis] = 0.0;
-    }
-
 	active = true;
 }
 
@@ -112,17 +195,12 @@ void Move::Spin()
 		if (reprap.GetGCodes()->ReadMove(nextMove, endStopsToCheck, noDeltaMapping))
 		{
 			currentFeedrate = nextMove[DRIVES];		// might be G1 with just an F field
-			if (!noDeltaMapping || !deltaMode)
+			if (!noDeltaMapping || !IsDeltaMode())
 			{
 				Transform(nextMove);
 			}
-			if (ddaRingAddPointer->Init(nextMove, endStopsToCheck, deltaMode && !noDeltaMapping))
+			if (ddaRingAddPointer->Init(nextMove, endStopsToCheck, IsDeltaMode() && !noDeltaMapping))
 			{
-//				const int32_t* machineCoords = ddaRingAddPointer->MachineCoordinates();
-//				for (size_t drive = 0; drive < DRIVES; ++drive)
-//				{
-//					nextMachineEndPoints[drive] = machineCoords[drive];
-//				}
 				ddaRingAddPointer = ddaRingAddPointer->GetNext();
 			}
 		}
@@ -295,7 +373,7 @@ void Move::SetPositions(const float move[DRIVES])
 
 void Move::EndPointToMachine(const float coords[], int32_t ep[], size_t numDrives) const
 {
-	if (deltaMode)
+	if (IsDeltaMode())
 	{
 		DeltaTransform(coords, ep);
 		for (size_t drive = AXES; drive < numDrives; ++drive)
@@ -337,7 +415,7 @@ int32_t Move::MotorEndPointToMachine(size_t drive, float coord)
 // This is computationally expensive on a delta, so only call it when necessary, and never from the step ISR.
 void Move::MachineToEndPoint(const int32_t motorPos[DRIVES], float machinePos[DRIVES], size_t numDrives) const
 {
-	if (deltaMode)
+	if (IsDeltaMode())
 	{
 		InverseDeltaTransform(motorPos, machinePos);			// convert the axes
 		for (size_t drive = AXES; drive < numDrives; ++drive)
@@ -439,50 +517,13 @@ void Move::InverseBedTransform(float xyzPoint[]) const
 // Convert motor step positions to Cartesian machine coordinates.
 // Used after homing and after individual motor moves.
 // Because this is computationally expensive, we only call it when necessary, and never from the step ISR.
-void Move::InverseDeltaTransform(const int32_t motorPos[AXES], volatile float machinePos[AXES]) const
+void Move::InverseDeltaTransform(const int32_t motorPos[AXES], float machinePos[AXES]) const
 {
-	const float Ha = MotorEndpointToPosition(motorPos[A_AXIS], A_AXIS);
-	const float Hb = MotorEndpointToPosition(motorPos[B_AXIS], B_AXIS);
-	const float Hc = MotorEndpointToPosition(motorPos[C_AXIS], C_AXIS);
-
-	const float Fa = square(towerX[A_AXIS]) + square(towerY[A_AXIS]) + square(Ha);
-	const float Fb = square(towerX[B_AXIS]) + square(towerY[B_AXIS]) + square(Hb);
-	const float Fc = square(towerX[C_AXIS]) + square(towerY[C_AXIS]) + square(Hc);
-
-	const float Xbc = towerX[C_AXIS] - towerX[B_AXIS];
-	const float Xca = towerX[A_AXIS] - towerX[C_AXIS];
-	const float Xab = towerX[B_AXIS] - towerX[A_AXIS];
-
-	const float Ybc = towerY[C_AXIS] - towerY[B_AXIS];
-	const float Yca = towerY[A_AXIS] - towerY[C_AXIS];
-	const float Yab = towerY[B_AXIS] - towerY[A_AXIS];
-
-//	debugPrintf("Ha=%f Hb=%f Hc=%f Fa=%f Fb=%f Fc=%f Xbc=%f Xca=%f Xab=%f Ybc=%f Yca=%f Yab=%f\n",
-//				Ha, Hb, Hc, Fa, Fb, Fc, Xbc, Xca, Xab, Ybc, Yca, Yab);
-
-	// Setup PQRSU such that x = -(S - uz)/P, y = (P - Rz)/Q
-	const float P = (Xbc * Fa) + (Xca * Fb) + (Xab * Fc);
-	const float S = (Ybc * Fa) + (Yca * Fb) + (Yab * Fc);
-
-	const float R = 2 * ((Xbc * Ha) + (Xca * Hb) + (Xab * Hc));
-	const float U = 2 * ((Ybc * Ha) + (Yca * Hb) + (Yab * Hc));
-
-	const float Q = 2 * (Xca * Yab - Xab * Yca);
-
-//	debugPrintf("P= %f R=%f S=%f U=%f Q=%f\n", P, R, S, U, Q);
-
-	const float Q2 = square(Q), R2 = square(R), U2 = square(U);
-
-	float A = U2 + R2 + Q2;
-	float minusHalfB = S * U + P * R + Ha * Q2 + towerX[A_AXIS] * U * Q - towerY[A_AXIS] * R * Q;
-	float C = square(S + towerX[A_AXIS] * Q) + square(P - towerY[A_AXIS] * Q) + (square(Ha) - square(deltaDiagonal)) * Q2;
-
-//	debugPrintf("A=%f minusHalfB=%f C=%f\n", A, minusHalfB, C);
-
-	float z = (minusHalfB - sqrt(square(minusHalfB) - A * C)) / A;
-	machinePos[X_AXIS] = (U * z - S) / Q;
-	machinePos[Y_AXIS] = (P - R * z) / Q;
-	machinePos[Z_AXIS] = z;
+	deltaParams.InverseTransform(
+			MotorEndpointToPosition(motorPos[A_AXIS], A_AXIS),
+			MotorEndpointToPosition(motorPos[B_AXIS], B_AXIS),
+			MotorEndpointToPosition(motorPos[C_AXIS], C_AXIS),
+			machinePos);
 
 	//DEBUG#
 	if (reprap.Debug(moduleMove))
@@ -498,8 +539,7 @@ void Move::DeltaTransform(const float machinePos[AXES], int32_t motorPos[AXES]) 
 {
 	for (size_t axis = 0; axis < AXES; ++axis)
 	{
-		motorPos[axis] = MotorEndPointToMachine(axis,
-							machinePos[Z_AXIS] + sqrt(square(deltaDiagonal) - square(machinePos[X_AXIS] - towerX[axis]) - square(machinePos[Y_AXIS] - towerY[axis])));
+		motorPos[axis] = MotorEndPointToMachine(axis, deltaParams.Transform(machinePos, axis));
 	}
 	if (reprap.Debug(moduleMove))
 	{
@@ -683,35 +723,6 @@ float Move::SecondDegreeTransformZ(float x, float y) const
 	return (1.0 - x)*(1.0 - y)*zBedProbePoints[0] + x*(1.0 - y)*zBedProbePoints[3] + (1.0 - x)*y*zBedProbePoints[1] + x*y*zBedProbePoints[2];
 }
 
-// Set the delta diagonal rod length. We assume all 3 rods have the same length.
-void Move::SetDeltaDiagonal(float diagonal)
-{
-	deltaDiagonal = diagonal;
-	deltaMode = (diagonal > 0.0);
-}
-
-// Set the delta radius. We assume the 3 towers are equally spaces around the circle they are on.
-void Move::SetDeltaRadius(float radius)
-{
-	const float cos30 = sqrt(3.0)/2.0;
-	const float sin30 = 0.5;
-
-	towerX[A_AXIS] = -(radius * cos30);
-	towerX[B_AXIS] = radius * cos30;
-	towerX[C_AXIS] = 0.0;
-
-	towerY[A_AXIS] = towerY[B_AXIS] = -(radius * sin30);
-	towerY[C_AXIS] = radius;
-}
-
-// Set the delta endstop adjustments
-void Move::SetDeltaEndstopAdjustments(float x, float y, float z)
-{
-	deltaEndstopAdjustments[X_AXIS] = x;
-	deltaEndstopAdjustments[Y_AXIS] = y;
-	deltaEndstopAdjustments[Z_AXIS] = z;
-}
-
 // This is the function that's called by the timer interrupt to step the motors.
 void Move::Interrupt()
 {
@@ -781,9 +792,9 @@ void Move::HitHighStop(size_t drive, DDA* hitDDA)
 {
 	if (drive < AXES)		// should always be true
 	{
-		float position = (deltaMode)
-							? reprap.GetPlatform()->AxisMaximum(Z_AXIS) + deltaEndstopAdjustments[drive]
-							        // this is a delta printer, so the motor is at the maximum Z value, give or take the endstop adjustment
+		float position = (IsDeltaMode())
+							? deltaParams.GetHomedCarriageHeight(drive)
+							        // this is a delta printer, so the motor is at the homed carriage height for this drive
 							: reprap.GetPlatform()->AxisMaximum(drive);
 									// this is a Cartesian printer, so we're at the maximum for this axis
 		hitDDA->SetDriveCoordinate(MotorEndPointToMachine(drive, position), drive);

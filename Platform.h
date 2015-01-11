@@ -111,6 +111,8 @@ const unsigned int numZProbeReadingsAveraged = 8;	// we average this number of r
 #define AXIS_MAXIMA {230, 200, 200} 			// mm
 #define AXIS_MINIMA {0, 0, 0}					// mm
 const float defaultPrintRadius = 50;			// mm
+const float defaultDeltaHomedHeight = 200;		// mm
+
 #define HOME_FEEDRATES {50.0, 50.0, 100.0/60.0}	// mm/sec (dc42 increased Z because we slow down z-homing when approaching the target height)
 
 const size_t X_AXIS = 0, Y_AXIS = 1, Z_AXIS = 2;	// The indices of the Cartesian axes in drive arrays
@@ -632,8 +634,6 @@ public:
   float AxisTotalLength(size_t axis) const;
   float GetElasticComp(size_t drive) const;
   void SetElasticComp(size_t drive, float factor);
-  float GetPrintRadius() const { return printRadius; }
-  void SetPrintRadius(float r) { printRadius = r; }
   void SetEndStopConfiguration(size_t axis, EndStopType endstopType, bool logicLevel);
   void GetEndStopConfiguration(size_t axis, EndStopType& endstopType, bool& logicLevel) const;
 
@@ -777,7 +777,6 @@ private:
 
   float axisMaxima[AXES];
   float axisMinima[AXES];
-  float printRadius;
   float homeFeedrates[AXES];
   EndStopType endStopType[AXES];
   bool endStopLogicLevel[AXES];

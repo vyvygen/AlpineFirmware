@@ -20,6 +20,53 @@ enum PointCoordinateSet
 	zSet = 4
 };
 
+// Class to hold the parameter for a delta machine.
+// Some of the values that are currently calculated on demand could be pre-calculated in Recalc() and stored instead.
+class DeltaParameters
+{
+public:
+	DeltaParameters();
+
+	bool IsDeltaMode() const { return deltaMode; }
+	float GetDiagonal() const { return diagonal; }
+	float GetRadius() const { return radius; }
+    float GetPrintRadius() const { return printRadius; }
+    float GetTowerX(size_t axis) const { return towerX[axis]; }
+    float GetTowerY(size_t axis) const { return towerY[axis]; }
+    float GetEndstopAdjustment(size_t axis) const { return endstopAdjustments[axis]; }
+    float GetHomedCarriageHeight(size_t axis) const { return homedCarriageHeight + endstopAdjustments[axis]; }
+    float GetPrintRadiusSquared() const { return printRadiusSquared; }
+
+    void SetDiagonal(float d) { diagonal = d; Recalc(); }
+    void SetRadius(float r);
+    void SetEndstopAdjustment(float x, size_t axis) { endstopAdjustments[axis] = x; }
+    void SetPrintRadius(float r) { printRadius = r; printRadiusSquared = r * r; }
+    float GetHomedHeight() const { return homedHeight; }
+    void SetDeltaHomedHeight(float h) { homedHeight = h; Recalc(); }
+
+    float Transform(const float machinePos[AXES], size_t axis) const;				// Calculate the motor position for a single tower from a Cartesian coordinate
+    void InverseTransform(float Ha, float Hb, float Hc, float machinePos[]) const;	// Calculate the Cartesian position from the motor positions
+
+private:
+	void Recalc();
+
+	// Core parameters
+    float diagonal;										// The diagonal rod length, all 3 are assumed to be the same length
+    float radius;										// The nominal delta radius, before any fine tuning of tower positions
+    float towerX[AXES];									// The X coordinate of each tower
+    float towerY[AXES];									// The Y coordinate of each tower
+    float endstopAdjustments[AXES];						// How much above or below the ideal position each endstop is
+    float printRadius;
+    float homedHeight;
+
+    // Derived values
+    bool deltaMode;										// True if this is a delta printer
+    float printRadiusSquared;
+    float homedCarriageHeight;
+	float Xbc, Xca, Xab, Ybc, Yca, Yab;
+	float coreFa, coreFb, coreFc;
+    float Q, Q2;
+};
 
 /**
  * This is the master movement class.  It controls all movement in the machine.
@@ -72,15 +119,11 @@ public:
     static float VectorBoxIntersection(const float v[], // Compute the length that a vector would have to have to...
     		const float box[], int8_t dimensions);		// ...just touch the surface of a hyperbox.
 
-    float GetDeltaDiagonal() const { return deltaDiagonal; }
-    void SetDeltaDiagonal(float diagonal);
-    float GetTowerX(size_t axis) { return towerX[axis]; }
-    float GetTowerY(size_t axis) { return towerY[axis]; }
-    void SetDeltaRadius(float radius);
-    const float *GetDeltaEndstopAdjustments() const { return deltaEndstopAdjustments; }
-    void SetDeltaEndstopAdjustments(float x, float y, float z);
+    const DeltaParameters& GetDeltaParams() const { return deltaParams; }
+    DeltaParameters& AccessDeltaParams() { return deltaParams; }
+    bool IsDeltaMode() const { return deltaParams.IsDeltaMode(); }
+
     bool StartNextMove(uint32_t startTime);				// start the next move, returning true if Step() needs to be called immediately
-    bool IsDeltaMode() const { return deltaMode; }
     void DeltaTransform(const float machinePos[AXES], int32_t motorPos[AXES]) const;				// Convert Cartesian coordinates to delta motor coordinates
     void MachineToEndPoint(const int32_t motorPos[], float machinePos[], size_t numDrives) const;	// Convert motor coordinates to machine coordinates
     void EndPointToMachine(const float coords[], int32_t ep[], size_t numDrives) const;
@@ -106,7 +149,7 @@ private:
     bool DDARingEmpty() const;							// Anything there?
     bool NoLiveMovement() const;						// Is a move running, or are there any queued?
 
-    void InverseDeltaTransform(const int32_t motorPos[AXES], volatile float machinePos[AXES]) const;	// Convert axis motor coordinates to Cartesian
+    void InverseDeltaTransform(const int32_t motorPos[AXES], float machinePos[AXES]) const;	// Convert axis motor coordinates to Cartesian
 
     // These implement the movement list
 
@@ -136,13 +179,7 @@ private:
     bool zProbing;										// Are we bed probing as well as moving?
     float longWait;										// A long time for things that need to be done occasionally
 
-//    float lastMachinePosition[DRIVES + 1];
-
-    bool deltaMode;										// True if this is a delta printer
-    float deltaDiagonal;								// The diagonal rod length, all 3 are assumed to be the same length
-    float towerX[AXES];									// The X coordinate of each tower
-    float towerY[AXES];									// The Y coordinate of each tower
-    float deltaEndstopAdjustments[AXES];				// How much above or below the Z axcios length each endstop is
+    DeltaParameters deltaParams;						// Information about the delta parameters of this machine
 };
 
 //******************************************************************************************************
