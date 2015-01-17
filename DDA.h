@@ -12,6 +12,9 @@
 class DriveMovement
 {
 public:
+	uint32_t CalcNextStepTime(size_t drive);
+	void DebugPrint(char c) const;
+
 	// These values don't depend on how the move is executed, so  are set by Init()
 	float dv;									// proportion of total movement for this drive
 	float stepsPerMm;							// steps per mm of movement in hypercuboid space
@@ -40,8 +43,6 @@ public:
 	// These values change as the step is executed
 	uint32_t nextStep;							// number of steps already done
 	uint32_t nextStepTime;						// how many clocks after the start of this move the next step is due
-
-	void DebugPrint(char c) const;
 
 	// Given an overall speed, return the signed speed of this drive
 	float GetDriveSpeed(float speed) const
@@ -95,7 +96,7 @@ public:
 	void SetFeedRate(float rate) { requestedSpeed = rate; }
 	float GetEndCoordinate(size_t drive, bool disableDeltaMapping);
 	bool FetchEndPosition(int32_t ep[DRIVES], float endCoords[AXES]);
-    void SetPositions(const float move[]);								// Force the endpoints to be these
+    void SetPositions(const float move[]);							// Force the endpoints to be these
 
 	void DebugPrint() const;
 
@@ -111,7 +112,6 @@ private:
 	static void DoLookahead(DDA *laDDA);							// called by AdjustEndSpeed to do the real work
 	void RecalculateMove();
 	void CalcNewSpeeds();
-	uint32_t CalcNextStepTime(DriveMovement& dm, size_t drive);		// called to calculate the time when the next step is due
 	void ReduceHomingSpeed(float newSpeed, size_t endstopDrive);	// called to reduce homing speed when a near-endstop is triggered
 
 	DDA* next;								// The next one in the ring

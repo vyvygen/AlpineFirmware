@@ -134,8 +134,6 @@ void Platform::Init()
 	SerialUSB.begin(BAUD_RATE);
 	Serial.begin(BAUD_RATE);					// this can't be done in the constructor because the Arduino port initialisation isn't complete at that point
 
-	DueFlashStorage::init();
-
 # if __cplusplus >= 201103L
 	static_assert(sizeof(nvData) <= 1024, "NVData too large");
 # else

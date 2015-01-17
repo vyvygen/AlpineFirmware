@@ -531,7 +531,7 @@ void DDA::Prepare()
 			// Prepare for the first step
 			dm.nextStep = 0;
 			dm.nextStepTime = 0;
-			uint32_t st = CalcNextStepTime(dm, drive);
+			uint32_t st = dm.CalcNextStepTime(drive);
 			if (st < firstStepTime)
 			{
 				firstStepTime = st;
@@ -580,47 +580,48 @@ bool DDA::Start(uint32_t tim)
 
 extern uint32_t /*maxStepTime,*/ maxCalcTime, minCalcTime, maxReps, sqrtErrors, lastRes; extern uint64_t lastNum;	//DEBUG
 
-inline uint32_t DDA::CalcNextStepTime(DriveMovement& dm, size_t drive)
+// Calculate the time since the start of the move when the next step for the specified DriveMovement is due
+inline uint32_t DriveMovement::CalcNextStepTime(size_t drive)
 {
-	uint32_t lastStepTime = dm.nextStepTime;
-	++dm.nextStep;
-	if (dm.nextStep > dm.totalSteps)
+	uint32_t lastStepTime = nextStepTime;
+	++nextStep;
+	if (nextStep > totalSteps)
 	{
-		dm.moving = false;
+		moving = false;
 		return NoStepTime;
 	}
 
-	if (dm.nextStep < dm.accelStopStep)
+	if (nextStep < accelStopStep)
 	{
-		dm.nextStepTime = isqrt(dm.startSpeedTimesCdivAsquared + (dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep)) - dm.startSpeedTimesCdivA;
+		nextStepTime = DDA::isqrt(startSpeedTimesCdivAsquared + (twoCsquaredTimesMmPerStepDivA * nextStep)) - startSpeedTimesCdivA;
 	}
-	else if (dm.nextStep < dm.decelStartStep)
+	else if (nextStep < decelStartStep)
 	{
-		dm.nextStepTime = (uint32_t)((int32_t)(((uint64_t)dm.mmPerStepTimesCdivtopSpeed * dm.nextStep)/mmPerStepFactor) + dm.accelClocksMinusAccelDistanceTimesCdivTopSpeed);
+		nextStepTime = (uint32_t)((int32_t)(((uint64_t)mmPerStepTimesCdivtopSpeed * nextStep)/mmPerStepFactor) + accelClocksMinusAccelDistanceTimesCdivTopSpeed);
 	}
-	else if (dm.nextStep < dm.reverseStartStep)
+	else if (nextStep < reverseStartStep)
 	{
-		dm.nextStepTime = dm.topSpeedTimesCdivAPlusDecelStartClocks
-							- isqrt(dm.twoDistanceToStopTimesCsquaredDivA - (dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep));
+		nextStepTime = topSpeedTimesCdivAPlusDecelStartClocks
+							- DDA::isqrt(twoDistanceToStopTimesCsquaredDivA - (twoCsquaredTimesMmPerStepDivA * nextStep));
 	}
 	else
 	{
-		if (dm.nextStep == dm.reverseStartStep)
+		if (nextStep == reverseStartStep)
 		{
-			reprap.GetPlatform()->SetDirection(drive, !dm.direction, false);
+			reprap.GetPlatform()->SetDirection(drive, !direction, false);
 		}
-		dm.nextStepTime = dm.topSpeedTimesCdivAPlusDecelStartClocks
-							+ isqrt((int64_t)(dm.twoCsquaredTimesMmPerStepDivA * dm.nextStep) - dm.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA);
+		nextStepTime = topSpeedTimesCdivAPlusDecelStartClocks
+							+ DDA::isqrt((int64_t)(twoCsquaredTimesMmPerStepDivA * nextStep) - fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA);
 
 	}
 	//TODO include delta support
 
-	if ((int32_t)dm.nextStepTime < (int32_t)(lastStepTime + 40))
+	if ((int32_t)nextStepTime < (int32_t)(lastStepTime + 40))
 	{
-		dm.stepError = true;
+		stepError = true;
 		return NoStepTime;
 	}
-	return dm.nextStepTime;
+	return nextStepTime;
 }
 
 bool DDA::Step()
@@ -698,7 +699,7 @@ if (numReps > maxReps) maxReps = numReps;
 					reprap.GetPlatform()->StepHigh(drive);
 //uint32_t t2 = Platform::GetInterruptClocks();
 //if (t2 - t1 > maxStepTime) maxStepTime = t2 - t1;
-					uint32_t st1 = CalcNextStepTime(dm, drive);
+					uint32_t st1 = dm.CalcNextStepTime(drive);
 					if (st1 < nextInterruptTime)
 					{
 						nextInterruptTime = st1;

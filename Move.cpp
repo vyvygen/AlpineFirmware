@@ -140,13 +140,11 @@ void Move::Init()
 
 	addNoMoreMoves = false;
 
-	int8_t slow = reprap.GetPlatform()->SlowestDrive();
+	size_t slow = reprap.GetPlatform()->SlowestDrive();
 	currentFeedrate = liveCoordinates[DRIVES] = reprap.GetPlatform()->HomeFeedRate(slow);
 
 	SetIdentityTransform();
-	tanXY = 0.0;
-	tanYZ = 0.0;
-	tanXZ = 0.0;
+	tanXY = tanYZ = tanXZ = 0.0;
 
 	lastZHit = 0.0;
 	zProbing = false;

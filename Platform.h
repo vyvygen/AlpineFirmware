@@ -655,7 +655,7 @@ public:
 //  void SetMixingDrives(int);
 //  int GetMixingDrives();
 
-  int8_t SlowestDrive() const;
+  uint8_t SlowestDrive() const;
 
   // Heat and temperature
   
@@ -1022,7 +1022,7 @@ inline void Platform::SetInstantDv(size_t drive, float value)
 	SetSlowestDrive();
 }
 
-inline int8_t Platform::SlowestDrive() const
+inline uint8_t Platform::SlowestDrive() const
 {
 	return slowestDrive;
 }
