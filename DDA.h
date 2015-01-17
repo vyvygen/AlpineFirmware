@@ -8,59 +8,15 @@
 #ifndef DDA_H_
 #define DDA_H_
 
-// This class describes a single movement of one drive
-class DriveMovement
-{
-public:
-	uint32_t CalcNextStepTime(size_t drive);
-	void DebugPrint(char c) const;
-
-	// These values don't depend on how the move is executed, so  are set by Init()
-	float dv;									// proportion of total movement for this drive
-	float stepsPerMm;							// steps per mm of movement in hypercuboid space
-	uint32_t totalSteps;						// total number of steps for this move
-	uint64_t twoCsquaredTimesMmPerStepDivA;		// 2 * clock^2 * mmPerStepInHyperCuboidSpace / acceleration
-	bool moving;								// true if this drive moves in this move, if false then all other values are don't cares
-	bool direction;								// forwards or backwards?
-	float compensationTime;						// the elasticity compensation time, in seconds
-	bool stepError;								// for debugging
-
-	// These values depend on how the move is executed, so they are set by Prepare()
-	uint32_t accelStopStep;						// the first step number at which we are no longer accelerating
-	uint32_t decelStartStep;					// the first step number at which we are decelerating
-	uint32_t reverseStartStep;					// the first step number for which we need to reverse direction to to elastic compensation
-
-	uint32_t mmPerStepTimesCdivtopSpeed;		// mmPerStepInHyperCuboidSpace * clock / topSpeed
-
-	// The following only need to be stored per-drive if we are supporting elasticity compensation
-	uint32_t startSpeedTimesCdivA;
-	uint64_t startSpeedTimesCdivAsquared;
-	int32_t accelClocksMinusAccelDistanceTimesCdivTopSpeed;					// this one can be negative
-	uint32_t topSpeedTimesCdivAPlusDecelStartClocks;
-	uint64_t twoDistanceToStopTimesCsquaredDivA;
-	int64_t fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA;		// this one can be negative
-
-	// These values change as the step is executed
-	uint32_t nextStep;							// number of steps already done
-	uint32_t nextStepTime;						// how many clocks after the start of this move the next step is due
-
-	// Given an overall speed, return the signed speed of this drive
-	float GetDriveSpeed(float speed) const
-	{
-		if (moving)
-		{
-			float res = speed * dv;
-			return (direction) ? -res : res;
-		}
-		return 0.0;
-	}
-};
+#include "DriveMovement.h"
 
 /**
  * This defines a single linear movement of the print head
  */
 class DDA
 {
+	friend class DriveMovement;
+
 public:
 
 	enum DDAState
@@ -99,8 +55,6 @@ public:
     void SetPositions(const float move[]);							// Force the endpoints to be these
 
 	void DebugPrint() const;
-
-	static uint32_t isqrt(uint64_t num);
 
 	static const uint32_t stepClockRate = VARIANT_MCK/32;			// the frequency of the clock used for stepper pulse timing (using TIMER_CLOCK3), about 0.38us resolution
 	static const uint64_t stepClockRateSquared = (uint64_t)stepClockRate * stepClockRate;
@@ -141,8 +95,6 @@ private:
 	float targetNextSpeed;					// The speed that the next move would like to start at
 
 	// These are calculated from the above and used in the ISR, so they are set up by Prepare()
-	uint32_t decelStartClocks;
-
 	uint32_t timeNeeded;					// in clocks
 	uint32_t moveStartTime;					// clock count at which the move was started
 	uint32_t firstStepTime;					// in clocks, relative to the start of the move
