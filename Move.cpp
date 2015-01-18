@@ -26,7 +26,7 @@ void DeltaParameters::SetRadius(float r)
 {
 	radius = r;
 
-	const float cos30 = sqrt(3.0)/2.0;
+	const float cos30 = sqrtf(3.0)/2.0;
 	const float sin30 = 0.5;
 
 	towerX[A_AXIS] = -(r * cos30);
@@ -44,18 +44,18 @@ void DeltaParameters::Recalc()
 	deltaMode = (radius > 0.0 && diagonal > radius);
 	if (deltaMode)
 	{
-		homedCarriageHeight = homedHeight + sqrt(square(diagonal) - square(radius));
+		homedCarriageHeight = homedHeight + sqrtf(fsquare(diagonal) - fsquare(radius));
 		Xbc = towerX[C_AXIS] - towerX[B_AXIS];
 		Xca = towerX[A_AXIS] - towerX[C_AXIS];
 		Xab = towerX[B_AXIS] - towerX[A_AXIS];
 		Ybc = towerY[C_AXIS] - towerY[B_AXIS];
 		Yca = towerY[A_AXIS] - towerY[C_AXIS];
 		Yab = towerY[B_AXIS] - towerY[A_AXIS];
-		coreFa = square(towerX[A_AXIS]) + square(towerY[A_AXIS]);
-		coreFb = square(towerX[B_AXIS]) + square(towerY[B_AXIS]);
-		coreFc = square(towerX[C_AXIS]) + square(towerY[C_AXIS]);
+		coreFa = fsquare(towerX[A_AXIS]) + fsquare(towerY[A_AXIS]);
+		coreFb = fsquare(towerX[B_AXIS]) + fsquare(towerY[B_AXIS]);
+		coreFc = fsquare(towerX[C_AXIS]) + fsquare(towerY[C_AXIS]);
 		Q = 2 * (Xca * Yab - Xab * Yca);
-		Q2 = square(Q);
+		Q2 = fsquare(Q);
 	}
 }
 
@@ -63,14 +63,14 @@ void DeltaParameters::Recalc()
 float DeltaParameters::Transform(const float machinePos[AXES], size_t axis) const
 {
 	return machinePos[Z_AXIS]
-	+ sqrt(square(diagonal) - square(machinePos[X_AXIS] - towerX[axis]) - square(machinePos[Y_AXIS] - towerY[axis]));
+	+ sqrt(fsquare(diagonal) - fsquare(machinePos[X_AXIS] - towerX[axis]) - fsquare(machinePos[Y_AXIS] - towerY[axis]));
 }
 
 void DeltaParameters::InverseTransform(float Ha, float Hb, float Hc, float machinePos[]) const
 {
-	const float Fa = coreFa + square(Ha);
-	const float Fb = coreFb + square(Hb);
-	const float Fc = coreFc + square(Hc);
+	const float Fa = coreFa + fsquare(Ha);
+	const float Fb = coreFb + fsquare(Hb);
+	const float Fc = coreFc + fsquare(Hc);
 
 //	debugPrintf("Ha=%f Hb=%f Hc=%f Fa=%f Fb=%f Fc=%f Xbc=%f Xca=%f Xab=%f Ybc=%f Yca=%f Yab=%f\n",
 //				Ha, Hb, Hc, Fa, Fb, Fc, Xbc, Xca, Xab, Ybc, Yca, Yab);
@@ -84,15 +84,15 @@ void DeltaParameters::InverseTransform(float Ha, float Hb, float Hc, float machi
 
 //	debugPrintf("P= %f R=%f S=%f U=%f Q=%f\n", P, R, S, U, Q);
 
-	const float R2 = square(R), U2 = square(U);
+	const float R2 = fsquare(R), U2 = fsquare(U);
 
 	float A = U2 + R2 + Q2;
 	float minusHalfB = S * U + P * R + Ha * Q2 + towerX[A_AXIS] * U * Q - towerY[A_AXIS] * R * Q;
-	float C = square(S + towerX[A_AXIS] * Q) + square(P - towerY[A_AXIS] * Q) + (square(Ha) - square(diagonal)) * Q2;
+	float C = fsquare(S + towerX[A_AXIS] * Q) + fsquare(P - towerY[A_AXIS] * Q) + (fsquare(Ha) - fsquare(diagonal)) * Q2;
 
 //	debugPrintf("A=%f minusHalfB=%f C=%f\n", A, minusHalfB, C);
 
-	float z = (minusHalfB - sqrt(square(minusHalfB) - A * C)) / A;
+	float z = (minusHalfB - sqrtf(fsquare(minusHalfB) - A * C)) / A;
 	machinePos[X_AXIS] = (U * z - S) / Q;
 	machinePos[Y_AXIS] = (P - R * z) / Q;
 	machinePos[Z_AXIS] = z;

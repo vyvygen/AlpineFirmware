@@ -82,13 +82,17 @@ private:
 	// These remain the same regardless of how we execute a move
 	int32_t endPoint[DRIVES];  				// Machine coordinates of the endpoint
 	float endCoordinates[AXES];				// The Cartesian coordinates at the end of the move
+	float directionVector[DRIVES];			// The normalised direction vector - first 3 are XYZ Cartesian coordinates even on a delta
 	bool endCoordinatesValid;				// True if endCoordinates can be relied on
     bool isDeltaMovement;					// True if this is a delta printer movement
 	EndstopChecks endStopsToCheck;			// Which endstops we are checking on this move
     float totalDistance;					// How long is the move in hypercuboid distance
 	float acceleration;						// The acceleration to use
     float requestedSpeed;					// The speed that the user asked for
+
+    // These are used only in delta calculations
     float a2plusb2;							// Sum of the squares of the X and Y movement fractions
+    int32_t cK;								// The Z movement fraction multiplied by K and converted to integer
 
     // These vary depending on how we connect the move with its predecessor and successor, but remain constant while the move is being executed
 	float startSpeed;

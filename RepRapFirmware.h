@@ -148,9 +148,19 @@ template<> inline double max(double _a, double _b)
 	return (isnan(_a) || _a > _b) ? _a : _b;
 }
 
-template<class X> inline X square(X arg)
+inline float fsquare(float arg)
 {
 	return arg * arg;
+}
+
+inline uint64_t isquare64(int32_t arg)
+{
+	return (uint64_t)((int64_t)arg * arg);
+}
+
+inline uint64_t isquare64(uint32_t arg)
+{
+	return (uint64_t)arg * arg;
 }
 
 #endif

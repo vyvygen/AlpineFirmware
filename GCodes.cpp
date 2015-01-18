@@ -455,10 +455,10 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 	if (applyLimits && reprap.GetMove()->IsDeltaMode() && AllAxesAreHomed())
 	{
 		// Constrain the move to be within the build radius
-		float diagonalSquared = square(moveBuffer[X_AXIS]) + square(moveBuffer[Y_AXIS]);
+		float diagonalSquared = fsquare(moveBuffer[X_AXIS]) + fsquare(moveBuffer[Y_AXIS]);
 		if (diagonalSquared > reprap.GetMove()->GetDeltaParams().GetPrintRadiusSquared())
 		{
-			float factor = sqrt(reprap.GetMove()->GetDeltaParams().GetPrintRadiusSquared()/diagonalSquared);
+			float factor = sqrtf(reprap.GetMove()->GetDeltaParams().GetPrintRadiusSquared()/diagonalSquared);
 			moveBuffer[X_AXIS] *= factor;
 			moveBuffer[Y_AXIS] *= factor;
 		}
