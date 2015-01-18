@@ -68,7 +68,14 @@ private:
 	void CalcNewSpeeds();
 	void ReduceHomingSpeed(float newSpeed, size_t endstopDrive);	// called to reduce homing speed when a near-endstop is triggered
 
-	DDA* next;								// The next one in the ring
+    static float Normalise(float v[], size_t dim1, size_t dim2);  	// Normalise a vector of dim1 dimensions to unit length in the first dim1 dimensions
+    static void Absolute(float v[], size_t dimensions);				// Put a vector in the positive hyperquadrant
+    static float Magnitude(const float v[], size_t dimensions);  	// Return the length of a vector
+    static void Scale(float v[], float scale, size_t dimensions);	// Multiply a vector by a scalar
+    static float VectorBoxIntersection(const float v[], 			// Compute the length that a vector would have to have to...
+    		const float box[], size_t dimensions);					// ...just touch the surface of a hyperbox.
+
+    DDA* next;								// The next one in the ring
 	DDA *prev;								// The previous one in the ring
 	volatile DDAState state;				// what state this DDA is in
 
@@ -76,10 +83,12 @@ private:
 	int32_t endPoint[DRIVES];  				// Machine coordinates of the endpoint
 	float endCoordinates[AXES];				// The Cartesian coordinates at the end of the move
 	bool endCoordinatesValid;				// True if endCoordinates can be relied on
+    bool isDeltaMovement;					// True if this is a delta printer movement
 	EndstopChecks endStopsToCheck;			// Which endstops we are checking on this move
     float totalDistance;					// How long is the move in hypercuboid distance
 	float acceleration;						// The acceleration to use
-    float requestedSpeed;
+    float requestedSpeed;					// The speed that the user asked for
+    float a2plusb2;							// Sum of the squares of the X and Y movement fractions
 
     // These vary depending on how we connect the move with its predecessor and successor, but remain constant while the move is being executed
 	float startSpeed;

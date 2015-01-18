@@ -27,22 +27,26 @@ class DriveMovement
 {
 public:
 	uint32_t CalcNextStepTime(size_t drive);
+	uint32_t CalcNextStepTimeDelta(size_t drive);
 	void PrepareCartesianAxis(const DDA& dda, const PrepParams& params);
-	void PrepareDeltaAxis(const DDA& dda, const PrepParams& params);
+	void PrepareDeltaAxis(const DDA& dda, const PrepParams& params, size_t drive);
 	void PrepareExtruder(const DDA& dda, const PrepParams& params);
 	void ReduceSpeed(float newSpeed, bool isNearEndstop);
-	void DebugPrint(char c) const;
+	void DebugPrint(char c, bool withDelta) const;
 
 	static uint32_t isqrt(uint64_t num);
 
 	// These values don't depend on how the move is executed, so  are set by Init()
 	float dv;									// proportion of total movement for this drive
 	float stepsPerMm;							// steps per mm of movement in hypercuboid space
-	uint32_t totalSteps;						// total number of steps for this move
-	uint64_t twoCsquaredTimesMmPerStepDivA;		// 2 * clock^2 * mmPerStepInHyperCuboidSpace / acceleration
-	bool moving;								// true if this drive moves in this move, if false then all other values are don't cares
-	bool direction;								// forwards or backwards?
 	float compensationTime;						// the elasticity compensation time, in seconds
+	float aAplusbB;								// for delta calculations
+	float dSquaredMinusAsquaredMinusBsquared;	// for delta calculations
+	uint64_t twoCsquaredTimesMmPerStepDivA;		// 2 * clock^2 * mmPerStepInHyperCuboidSpace / acceleration
+	int32_t h0MinusZ0;							// the starting step position less the starting Z height, needed for delta calculations
+	uint32_t totalSteps;						// total number of steps for this move
+	bool moving;								// true if this drive moves in this move, if false then all other values are don't cares
+	bool direction;								// true=forwards, false=backwards
 	bool stepError;								// for debugging
 
 	// These values depend on how the move is executed, so they are set by Prepare()

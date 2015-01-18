@@ -111,13 +111,6 @@ public:
     void Transform(float move[]) const;					// Take a position and apply the bed and the axis-angle compensations
     void InverseTransform(float move[]) const;			// Go from a transformed point back to user coordinates
     void Diagnostics();									// Report useful stuff
-    static float Normalise(float v[], int8_t dimensions);  	// Normalise a vector to unit length
-    static void Absolute(float v[], int8_t dimensions);		// Put a vector in the positive hyperquadrant
-    static float Magnitude(const float v[], int8_t dimensions);  // Return the length of a vector
-    static void Scale(float v[], float scale,					// Multiply a vector by a scalar
-    		int8_t dimensions);
-    static float VectorBoxIntersection(const float v[], // Compute the length that a vector would have to have to...
-    		const float box[], int8_t dimensions);		// ...just touch the surface of a hyperbox.
 
     const DeltaParameters& GetDeltaParams() const { return deltaParams; }
     DeltaParameters& AccessDeltaParams() { return deltaParams; }

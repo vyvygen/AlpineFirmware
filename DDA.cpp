@@ -31,11 +31,11 @@ void DDA::DebugPrint() const
 				firstStepTime, totalDistance, acceleration, requestedSpeed,
 				topSpeed, startSpeed, endSpeed, accelStopTime, decelStartTime, totalTime, accelDistance, decelDistance);
 	reprap.GetPlatform()->GetLine()->Flush();
-	ddm[0].DebugPrint('x');
-	ddm[1].DebugPrint('y');
-	ddm[2].DebugPrint('z');
-	ddm[3].DebugPrint('1');
-	ddm[4].DebugPrint('2');
+	ddm[0].DebugPrint('x', isDeltaMovement);
+	ddm[1].DebugPrint('y', isDeltaMovement);
+	ddm[2].DebugPrint('z', isDeltaMovement);
+	ddm[3].DebugPrint('1', false);
+	ddm[4].DebugPrint('2', false);
 	reprap.GetPlatform()->GetLine()->Flush();
 }
 
@@ -55,42 +55,63 @@ void DDA::Init()
 bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 {
 	// 1. Compute the new endpoints and the movement vector
-	bool deltaAxisMovement = false;										// will be set true if we are doing an XYZ move on a delta printer
 	const int32_t *positionNow = prev->DriveCoordinates();
 	if (doDeltaMapping)
 	{
 		reprap.GetMove()->DeltaTransform(nextMove, endPoint);			// transform the axis coordinates if on a delta printer
-		deltaAxisMovement = (endPoint[X_AXIS] != positionNow[X_AXIS]) || (endPoint[Y_AXIS] != positionNow[Y_AXIS]) || (endPoint[Z_AXIS] != positionNow[Z_AXIS]);
+		isDeltaMovement = (endPoint[X_AXIS] != positionNow[X_AXIS]) || (endPoint[Y_AXIS] != positionNow[Y_AXIS]) || (endPoint[Z_AXIS] != positionNow[Z_AXIS]);
+	}
+	else
+	{
+		isDeltaMovement = false;
 	}
 
 	bool realMove = false, xyMoving = false;
-	float normalisedDirectionVector[DRIVES];	// Used to hold a unit-length vector in the direction of motion
+	float normalisedDirectionVector[DRIVES];			// Used to hold a unit-length vector in the direction of motion
 	float accelerations[DRIVES];
 	const float *normalAccelerations = reprap.GetPlatform()->Accelerations();
 	for (size_t drive = 0; drive < DRIVES; drive++)
 	{
-		if (drive < AXES)
-		{
-			endCoordinates[drive] = nextMove[drive];
-		}
+		accelerations[drive] = normalAccelerations[drive];
 		if (drive >= AXES || !doDeltaMapping)
 		{
 			endPoint[drive] = Move::MotorEndPointToMachine(drive, nextMove[drive]);
 		}
-		int32_t delta = (drive < AXES) ? endPoint[drive] - positionNow[drive] : endPoint[drive];
-		normalisedDirectionVector[drive] = (float)delta/reprap.GetPlatform()->DriveStepsPerUnit(drive);
+
+		int32_t delta;
+		if (drive < AXES)
+		{
+			endCoordinates[drive] = nextMove[drive];
+			delta = endPoint[drive] - positionNow[drive];
+		}
+		else
+		{
+			delta = endPoint[drive];
+		}
+
 		DriveMovement& dm = ddm[drive];
-		dm.moving = (delta != 0 || (drive < AXES && deltaAxisMovement));	// on a delta printer, if one tower moves then we assume they all do
-		accelerations[drive] = normalAccelerations[drive];
+		if (drive < AXES && isDeltaMovement)
+		{
+			normalisedDirectionVector[drive] = nextMove[drive] - prev->GetEndCoordinate(drive, false);
+			dm.moving = true;							// on a delta printer, if one tower moves then we assume they all do
+		}
+		else
+		{
+			normalisedDirectionVector[drive] = (float)delta/reprap.GetPlatform()->DriveStepsPerUnit(drive);
+			dm.moving = (delta != 0);
+		}
+
 		if (dm.moving)
 		{
 			dm.totalSteps = labs(delta);
-			dm.direction = (delta >= 0);
+			dm.direction = (delta >= 0);				// this may be wrong on a delta printer, but we correct it later
 			realMove = true;
+
 			if (drive < Z_AXIS)
 			{
 				xyMoving = true;
 			}
+
 			if (drive >= AXES && xyMoving)
 			{
 				dm.compensationTime = reprap.GetPlatform()->GetElasticComp(drive);
@@ -115,20 +136,74 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 
 	// 3. Store some values
 	endStopsToCheck = ce;
-	endSpeed = 0.0;					// until the next move asks us to adjust it
 	endCoordinatesValid = doDeltaMapping;
 
-	// 4. Compute the direction and amount of motion, moved to the positive hyperquadrant
-	Move::Absolute(normalisedDirectionVector, DRIVES);
-	totalDistance = Move::Normalise(normalisedDirectionVector, DRIVES);
+	// 4. Normalise the direction vector and compute the amount of motion.
+	// If there is any XYZ movement, then we normalise it so that the total XYZ movement has unit length.
+	// This means that the user gets the feed rate that he asked for. It also makes the delta calculations simpler.
+	if (xyMoving || ddm[Z_AXIS].moving)
+	{
+		totalDistance = Normalise(normalisedDirectionVector, DRIVES, AXES);
+		if (isDeltaMovement)
+		{
+			// The following are only needed when doing delta movements. Set them up before we convert normalisedDirectionVector to absolute.
+			a2plusb2 = square(normalisedDirectionVector[X_AXIS]) + square(normalisedDirectionVector[Y_AXIS]);
+
+			const DeltaParameters& dparams = reprap.GetMove()->GetDeltaParams();
+			const float initialX = prev->GetEndCoordinate(X_AXIS, false);
+			const float initialY = prev->GetEndCoordinate(Y_AXIS, false);
+			const float a2b2D2 = a2plusb2 * square(dparams.GetDiagonal());
+
+			for (size_t drive = 0; drive < AXES; ++drive)
+			{
+				const float A = initialX - dparams.GetTowerX(drive);
+				const float B = initialY - dparams.GetTowerY(drive);
+				DriveMovement& dm = ddm[drive];
+				dm.aAplusbB = A * normalisedDirectionVector[X_AXIS] + B * normalisedDirectionVector[Y_AXIS];
+				dm.dSquaredMinusAsquaredMinusBsquared = square(dparams.GetDiagonal()) - square(A) - square(B);
+				dm.h0MinusZ0 = (int32_t)sqrt(dm.dSquaredMinusAsquaredMinusBsquared);
+//bool tempb = dm.direction;
+				// Calculate the distance at which we need to reverse direction.
+				// This is most easily done here instead of in Prepare() because we have the full normalised direction vector available.
+				if (a2plusb2 <= 0)
+				{
+					// Pure Z movement
+					dm.direction = (normalisedDirectionVector[Z_AXIS] >= 0.0);
+					dm.reverseStartStep = 0xFFFFFFFF;
+//debugPrintf("Drive=%u h0-z0=%d dir=%d rss=%u (pure z)\n", drive, dm.h0MinusZ0, (int)dm.direction, dm.reverseStartStep);
+				}
+				else
+				{
+					const float drev = ((normalisedDirectionVector[Z_AXIS] * sqrt(a2b2D2 - square(A * normalisedDirectionVector[Y_AXIS] - B * normalisedDirectionVector[X_AXIS])))
+										- dm.aAplusbB)/a2plusb2;
+					dm.direction = (drev > 0.0);					// run the drive forwards if the maximum height is ahead of the start position
+					if (dm.direction && drev < totalDistance)		// if the reversal point is within range
+					{
+						float hrev = normalisedDirectionVector[Z_AXIS] * drev + sqrt(dm.dSquaredMinusAsquaredMinusBsquared - 2 * drev * dm.aAplusbB - a2plusb2 * square(drev));
+						dm.reverseStartStep = (uint32_t)((hrev - dm.h0MinusZ0) * reprap.GetPlatform()->DriveStepsPerUnit(drive));
+//debugPrintf("Drive=%u h0-z0=%d dir=%d drev=%f hrev=%f rss=%u\n", drive, dm.h0MinusZ0, (int)dm.direction, drev, hrev, dm.reverseStartStep);
+					}
+					else
+					{
+						dm.reverseStartStep = 0xFFFFFFFF;
+debugPrintf("Drive=%u h0-z0=%d dir=%d drev=%f rss=%u\n", drive, dm.h0MinusZ0, (int)dm.direction, drev, dm.reverseStartStep);
+					}
+				}
+dm.direction = tempb;
+			}
+		}
+	}
+	else
+	{
+		totalDistance = Normalise(normalisedDirectionVector, DRIVES, DRIVES);
+	}
 
 	// 5. Compute the maximum acceleration available
-	acceleration = Move::VectorBoxIntersection(normalisedDirectionVector, accelerations, DRIVES);
+	Absolute(normalisedDirectionVector, DRIVES);
+	acceleration = VectorBoxIntersection(normalisedDirectionVector, accelerations, DRIVES);
 
 	// Set the speed to the smaller of the requested and maximum speed.
-	// Note: this assumes that the requested feedrate is the Cartesian diagonal of all the drive moves (as in the RRP 0.78 release).
-	// This will cause the actual feedrate to be slightly lower than requested if an XYZ move includes extrusion, however the effect is only a few percent.
-	requestedSpeed = min<float>(nextMove[DRIVES], Move::VectorBoxIntersection(normalisedDirectionVector, reprap.GetPlatform()->MaxFeedrates(), DRIVES));
+	requestedSpeed = min<float>(nextMove[DRIVES], VectorBoxIntersection(normalisedDirectionVector, reprap.GetPlatform()->MaxFeedrates(), DRIVES));
 
 	// 6. Set up the parameters for the individual drives
 	for (size_t i = 0; i < DRIVES; ++i)
@@ -142,11 +217,12 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 		}
 	}
 
-	// 7. Calculate the accelerate and decelerate distances and the top speed
+	// 7. Calculate the provisional accelerate and decelerate distances and the top speed
+	endSpeed = 0.0;					// until the next move asks us to adjust it
+
 	if (prev->state != provisional)
 	{
-		// There is no previous move that we can adjust, so this move must start at zero speed, and for now it must also end at zero speed.
-		// Calculate the distance required to accelerate to the requested speed: v^2 = u^2 + 2as
+		// There is no previous move that we can adjust, so this move must start at zero speed.
 		startSpeed = 0.0;
 	}
 	else
@@ -154,8 +230,6 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 		// Try to meld this move to the previous move to avoid stop/start
 		// Assuming that this move ends with zero speed, calculate the maximum possible starting speed: u^2 = v^2 - 2as
 		float maxStartSpeed = sqrt(acceleration * totalDistance * 2.0);
-
-		// Determine the ideal starting speed, given that the end speed is constrained to zero until we have another move to follow it
 		prev->targetNextSpeed = min<float>(maxStartSpeed, requestedSpeed);
 		DoLookahead(prev);
 		startSpeed = prev->targetNextSpeed;
@@ -425,9 +499,9 @@ void DDA::Prepare()
 			{
 				dm.PrepareExtruder(*this, params);
 			}
-			else if (reprap.GetMove()->IsDeltaMode())
+			else if (isDeltaMovement)
 			{
-				dm.PrepareDeltaAxis(*this, params);
+				dm.PrepareDeltaAxis(*this, params, drive);
 			}
 			else
 			{
@@ -449,7 +523,7 @@ void DDA::Prepare()
 			// Prepare for the first step
 			dm.nextStep = 0;
 			dm.nextStepTime = 0;
-			uint32_t st = dm.CalcNextStepTime(drive);
+			uint32_t st = (isDeltaMovement && drive < AXES) ? dm.CalcNextStepTimeDelta(drive) : dm.CalcNextStepTime(drive);
 			if (st < firstStepTime)
 			{
 				firstStepTime = st;
@@ -573,7 +647,8 @@ if (numReps > maxReps) maxReps = numReps;
 					reprap.GetPlatform()->StepHigh(drive);
 //uint32_t t2 = Platform::GetInterruptClocks();
 //if (t2 - t1 > maxStepTime) maxStepTime = t2 - t1;
-					uint32_t st1 = dm.CalcNextStepTime(drive);
+
+					uint32_t st1 = (isDeltaMovement && drive < AXES) ? dm.CalcNextStepTimeDelta(drive) : dm.CalcNextStepTime(drive);
 					if (st1 < nextInterruptTime)
 					{
 						nextInterruptTime = st1;
@@ -675,6 +750,70 @@ void DDA::PrintIfHasStepError()
 			}
 			ddm[drive].stepError = false;
 		}
+	}
+}
+
+// Take a unit positive-hyperquadrant vector, and return the factor needed to obtain
+// length of the vector as projected to touch box[].
+float DDA::VectorBoxIntersection(const float v[], const float box[], size_t dimensions)
+{
+	// Generate a vector length that is guaranteed to exceed the size of the box
+	float biggerThanBoxDiagonal = 2.0*Magnitude(box, dimensions);
+	float magnitude = biggerThanBoxDiagonal;
+	for (size_t d = 0; d < dimensions; d++)
+	{
+		if (biggerThanBoxDiagonal*v[d] > box[d])
+		{
+			float a = box[d]/v[d];
+			if (a < magnitude)
+			{
+				magnitude = a;
+			}
+		}
+	}
+	return magnitude;
+}
+
+// Normalise a vector, and also return its previous magnitude
+float DDA::Normalise(float v[], size_t dim1, size_t dim2)
+{
+	float magnitude = Magnitude(v, dim2);
+	if (magnitude <= 0.0)
+	{
+		return 0.0;
+	}
+	float originalMagnitude = Magnitude(v, dim1);
+	Scale(v, 1.0/magnitude, dim1);
+	return originalMagnitude;
+}
+
+// Return the magnitude of a vector
+float DDA::Magnitude(const float v[], size_t dimensions)
+{
+	float magnitude = 0.0;
+	for (size_t d = 0; d < dimensions; d++)
+	{
+		magnitude += v[d]*v[d];
+	}
+	magnitude = sqrt(magnitude);
+	return magnitude;
+}
+
+// Multiply a vector by a scalar
+void DDA::Scale(float v[], float scale, size_t dimensions)
+{
+	for(size_t d = 0; d < dimensions; d++)
+	{
+		v[d] = scale*v[d];
+	}
+}
+
+// Move a vector into the positive hyperquadrant
+void DDA::Absolute(float v[], size_t dimensions)
+{
+	for(size_t d = 0; d < dimensions; d++)
+	{
+		v[d] = fabsf(v[d]);
 	}
 }
 

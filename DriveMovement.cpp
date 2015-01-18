@@ -41,9 +41,11 @@ void DriveMovement::PrepareCartesianAxis(const DDA& dda, const PrepParams& param
 }
 
 // Prepare this DM for a Delta axis move
-void DriveMovement::PrepareDeltaAxis(const DDA& dda, const PrepParams& params)
+void DriveMovement::PrepareDeltaAxis(const DDA& dda, const PrepParams& params, size_t drive)
 {
+	uint32_t temp = reverseStartStep;
 	PrepareCartesianAxis(dda, params);			//TODO write this!
+	reverseStartStep = temp;
 }
 
 // Prepare this DM for an extruder move
@@ -155,7 +157,44 @@ uint32_t DriveMovement::CalcNextStepTime(size_t drive)
 							+ isqrt((int64_t)(twoCsquaredTimesMmPerStepDivA * nextStep) - fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA);
 
 	}
-	//TODO include delta support
+
+	if ((int32_t)nextStepTime < (int32_t)(lastStepTime + 40))
+	{
+		stepError = true;
+		return NoStepTime;
+	}
+	return nextStepTime;
+}
+
+// Calculate the time since the start of the move when the next step for the specified DriveMovement is due
+uint32_t DriveMovement::CalcNextStepTimeDelta(size_t drive)
+{
+	uint32_t lastStepTime = nextStepTime;
+	++nextStep;
+	if (nextStep > totalSteps)
+	{
+		moving = false;
+		return NoStepTime;
+	}
+
+#if 0
+	//TODO delta code
+#else
+	// Cartesian code for now
+	if (nextStep < accelStopStep)
+	{
+		nextStepTime = isqrt(startSpeedTimesCdivAsquared + (twoCsquaredTimesMmPerStepDivA * nextStep)) - startSpeedTimesCdivA;
+	}
+	else if (nextStep < decelStartStep)
+	{
+		nextStepTime = (uint32_t)((int32_t)(((uint64_t)mmPerStepTimesCdivtopSpeed * nextStep)/mmPerStepFactor) + accelClocksMinusAccelDistanceTimesCdivTopSpeed);
+	}
+	else
+	{
+		nextStepTime = topSpeedTimesCdivAPlusDecelStartClocks
+							- isqrt(twoDistanceToStopTimesCsquaredDivA - (twoCsquaredTimesMmPerStepDivA * nextStep));
+	}
+#endif
 
 	if ((int32_t)nextStepTime < (int32_t)(lastStepTime + 40))
 	{
@@ -180,7 +219,7 @@ void DriveMovement::ReduceSpeed(float newSpeed, bool isNearEndstop)
 	}
 }
 
-void DriveMovement::DebugPrint(char c) const
+void DriveMovement::DebugPrint(char c, bool withDelta) const
 {
 	if (moving || stepError)
 	{
@@ -196,6 +235,10 @@ void DriveMovement::DebugPrint(char c) const
 					mmPerStepTimesCdivtopSpeed, startSpeedTimesCdivA, startSpeedTimesCdivAsquared, accelClocksMinusAccelDistanceTimesCdivTopSpeed,
 					topSpeedTimesCdivAPlusDecelStartClocks, twoDistanceToStopTimesCsquaredDivA, fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA
 					);
+		if (withDelta)
+		{
+			debugPrintf("aA+bB=%f D2-A2-B2=%f h0-z0=%d\n", aAplusbB, dSquaredMinusAsquaredMinusBsquared, h0MinusZ0);
+		}
 	}
 	else
 	{
