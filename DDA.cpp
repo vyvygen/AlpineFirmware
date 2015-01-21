@@ -25,22 +25,22 @@ int32_t DDA::GetTimeLeft() const
 
 void DDA::DebugPrint() const
 {
-	debugPrintf("DDA: fstep=%u d=%f a=%f reqv=%f"
-				" topv=%f startv=%f endv=%f tstopa=%f tstartd=%f ttotal=%f daccel=%f ddecel=%f vec=",
-				firstStepTime, totalDistance, acceleration, requestedSpeed,
-				topSpeed, startSpeed, endSpeed, accelStopTime, decelStartTime, totalTime, accelDistance, decelDistance);
+	debugPrintf("DDA: d=%f vec=", totalDistance);
 	for (size_t i = 0; i < 5; ++i)
 	{
 		debugPrintf("%c%f", ((i == 0) ? '[' : ' '), directionVector[i]);
 	}
-	debugPrintf("]\n");
-	reprap.GetPlatform()->GetLine()->Flush();
+	debugPrintf("] a=%f reqv=%f topv=%f startv=%f endv=%f\n"
+				"daccel=%f ddecel=%f fstep=%u\n",
+				acceleration, requestedSpeed, topSpeed, startSpeed, endSpeed,
+				accelDistance, decelDistance, firstStepTime);
+//	reprap.GetPlatform()->GetLine()->Flush();
 	ddm[0].DebugPrint('x', isDeltaMovement);
 	ddm[1].DebugPrint('y', isDeltaMovement);
 	ddm[2].DebugPrint('z', isDeltaMovement);
 	ddm[3].DebugPrint('1', false);
 	ddm[4].DebugPrint('2', false);
-	reprap.GetPlatform()->GetLine()->Flush();
+//	reprap.GetPlatform()->GetLine()->Flush();
 }
 
 // This is called by Move to initialize all DDAs
@@ -84,7 +84,7 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 		int32_t delta;
 		if (drive < AXES)
 		{
-			endCoordinates[drive] = nextMove[drive];
+			endCoordinates[drive] = nextMove[drive];					// this will be wrong if we are doing a special move
 			delta = endPoint[drive] - positionNow[drive];
 		}
 		else
@@ -135,7 +135,8 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 
 	// 3. Store some values
 	endStopsToCheck = ce;
-	endCoordinatesValid = doDeltaMapping;
+	// The end coordinates will be valid at the end of this move if it does not involve endstop checks and is not a special move on a delta printer
+	endCoordinatesValid = (ce == 0) && (doDeltaMapping || !reprap.GetMove()->IsDeltaMode());
 
 	// 4. Normalise the direction vector and compute the amount of motion.
 	// If there is any XYZ movement, then we normalise it so that the total XYZ movement has unit length.
@@ -147,7 +148,7 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 		{
 			// The following are only needed when doing delta movements
 			a2plusb2 = fsquare(directionVector[X_AXIS]) + fsquare(directionVector[Y_AXIS]);
-			cK = (int32_t)(directionVector[Z_AXIS] * DriveMovement::K2);
+			cKc = (int32_t)(directionVector[Z_AXIS] * DriveMovement::Kc);
 
 			const DeltaParameters& dparams = reprap.GetMove()->GetDeltaParams();
 			const float initialX = prev->GetEndCoordinate(X_AXIS, false);
@@ -163,15 +164,15 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 				const float aAplusbB = A * directionVector[X_AXIS] + B * directionVector[Y_AXIS];
 				const float dSquaredMinusAsquaredMinusBsquared = fsquare(dparams.GetDiagonal()) - fsquare(A) - fsquare(B);
 				float h0MinusZ0 = sqrtf(dSquaredMinusAsquaredMinusBsquared);
-				dm.mp.delta.hmz0cK = (int32_t)(h0MinusZ0 * directionVector[Z_AXIS] * DriveMovement::K2);
-				dm.mp.delta.minusAaPlusBbTimesKs = (int32_t)(aAplusbB * stepsPerMm * DriveMovement::K2);
+				dm.mp.delta.hmz0sK = (int32_t)(h0MinusZ0 * stepsPerMm * DriveMovement::K2);
+				dm.mp.delta.minusAaPlusBbTimesKs = -(int32_t)(aAplusbB * stepsPerMm * DriveMovement::K2);
 				dm.mp.delta.dSquaredMinusAsquaredMinusBsquaredTimesKsquaredSsquared =
-						(int64_t)(dSquaredMinusAsquaredMinusBsquared * fsquare(stepsPerMm) * DriveMovement::K2 * DriveMovement::K2);
+						(int64_t)(dSquaredMinusAsquaredMinusBsquared * fsquare(stepsPerMm * DriveMovement::K2));
 
 				// Calculate the distance at which we need to reverse direction.
 				if (a2plusb2 <= 0)
 				{
-					// Pure Z movement
+					// Pure Z movement. We can't use the main calculation because it divides by a2plusb2.
 					dm.direction = (directionVector[Z_AXIS] >= 0.0);
 					dm.mp.delta.reverseStartStep = dm.totalSteps + 1;
 				}
@@ -179,23 +180,24 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 				{
 					const float drev = ((directionVector[Z_AXIS] * sqrt(a2b2D2 - fsquare(A * directionVector[Y_AXIS] - B * directionVector[X_AXIS])))
 										- aAplusbB)/a2plusb2;
-					if (dm.direction && drev < totalDistance)		// if the reversal point is within range
+					if (drev > 0.0 && drev < totalDistance)		// if the reversal point is within range
 					{
 						// Calculate how many steps we need to move up before reversing
 						float hrev = directionVector[Z_AXIS] * drev + sqrt(dSquaredMinusAsquaredMinusBsquared - 2 * drev * aAplusbB - a2plusb2 * fsquare(drev));
-						dm.mp.delta.reverseStartStep = (uint32_t)((hrev - h0MinusZ0) * stepsPerMm);
+						uint32_t numStepsUp = (uint32_t)((hrev - h0MinusZ0) * stepsPerMm);
+						dm.mp.delta.reverseStartStep = numStepsUp + 1;
 
 						// Correct the initial direction and the total number of steps
 						if (dm.direction)
 						{
 							// Net movement is up, so we will go up a bit and then down by a lesser amount
-							dm.totalSteps = (2 * dm.mp.delta.reverseStartStep) - dm.totalSteps;
+							dm.totalSteps = (2 * numStepsUp) - dm.totalSteps;
 						}
 						else
 						{
 							// Net movement is down, so we will go up first and then down by a greater amount
 							dm.direction = true;
-							dm.totalSteps = (2 * dm.mp.delta.reverseStartStep) + dm.totalSteps;
+							dm.totalSteps = (2 * numStepsUp) + dm.totalSteps;
 						}
 					}
 					else
@@ -425,7 +427,8 @@ void DDA::CalcNewSpeeds()
 	} while (limited);
 }
 
-bool DDA::FetchEndPosition(int32_t ep[DRIVES], float endCoords[AXES])
+// This is called by Move::CurrentMoveCompleted to update the live coordinates from the move that has just finished
+bool DDA::FetchEndPosition(volatile int32_t ep[DRIVES], volatile float endCoords[AXES])
 {
 	for (size_t drive = 0; drive < DRIVES; ++drive)
 	{
@@ -482,9 +485,9 @@ void DDA::Prepare()
 	params.decelStartDistance = totalDistance - decelDistance;
 
 	// Convert the accelerate/decelerate distances to times
-	accelStopTime = (topSpeed - startSpeed)/acceleration;
-	decelStartTime = accelStopTime + (params.decelStartDistance - accelDistance)/topSpeed;
-	totalTime = decelStartTime + (topSpeed - endSpeed)/acceleration;
+	float accelStopTime = (topSpeed - startSpeed)/acceleration;
+	float decelStartTime = accelStopTime + (params.decelStartDistance - accelDistance)/topSpeed;
+	float totalTime = decelStartTime + (topSpeed - endSpeed)/acceleration;
 	timeNeeded = (uint32_t)(totalTime * stepClockRate);
 
 	params.startSpeedTimesCdivA = (uint32_t)((startSpeed * stepClockRate)/acceleration);
@@ -543,6 +546,7 @@ void DDA::Prepare()
 			// Prepare for the first step
 			dm.nextStep = 0;
 			dm.nextStepTime = 0;
+			dm.stepError = false;							// clear any previous step error before we call CalcNextStep
 			uint32_t st = (isDeltaMovement && drive < AXES) ? dm.CalcNextStepTimeDelta(*this, drive) : dm.CalcNextStepTimeCartesian(drive);
 			if (st < firstStepTime)
 			{
@@ -689,10 +693,13 @@ if (numReps > maxReps) maxReps = numReps;
 		{
 			state = completed;
 		}
+
 		if (state == completed)
 		{
-			// Schedule the next move immediately - we put the spaces between moves at the start of moves, not the end
-			return reprap.GetMove()->StartNextMove(moveStartTime + moveCompletedTime);
+			uint32_t finishTime = moveStartTime + moveCompletedTime;
+			Move *move = reprap.GetMove();
+			move->CurrentMoveCompleted();				// tell Move that the current move is complete
+			return move->StartNextMove(finishTime);		// schedule the next move
 		}
 		repeat = reprap.GetPlatform()->ScheduleInterrupt(nextInterruptTime + moveStartTime);
 	} while (repeat);

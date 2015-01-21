@@ -1142,7 +1142,7 @@ bool GCodes::SetPrintZProbe(GCodeBuffer* gb, StringRef& reply)
 
 void GCodes::GetCurrentCoordinates(StringRef& s) const
 {
-	float liveCoordinates[DRIVES + 1];
+	float liveCoordinates[DRIVES];
 	reprap.GetMove()->LiveCoordinates(liveCoordinates);
 	const Tool *currentTool = reprap.GetCurrentTool();
 	if (currentTool != NULL)

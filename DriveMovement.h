@@ -8,6 +8,9 @@
 #ifndef DRIVEMOVEMENT_H_
 #define DRIVEMOVEMENT_H_
 
+// Set the following nonzero to cache the square of startSpeedTimesCdivA, at the cost of 64 bytes of memory per DDA
+#define CACHE_startSpeedTimesCdivAsquared	0
+
 class DDA;
 
 // Struct for passing parameters to the DriveMovement Prepare methods
@@ -45,8 +48,10 @@ public:
 
 	// The following only need to be stored per-drive if we are supporting elasticity compensation
 	uint32_t startSpeedTimesCdivA;
+#if CACHE_startSpeedTimesCdivAsquared
 	uint64_t startSpeedTimesCdivAsquared;
-	int32_t accelClocksMinusAccelDistanceTimesCdivTopSpeed;					// this one can be negative
+#endif
+	int32_t accelClocksMinusAccelDistanceTimesCdivTopSpeed;		// this one can be negative
 	uint32_t topSpeedTimesCdivAPlusDecelStartClocks;
 	uint64_t twoDistanceToStopTimesCsquaredDivA;
 
@@ -72,10 +77,10 @@ public:
 		{
 			// The following don't depend on how the move is executed, so they can be set up in Init
 			uint32_t reverseStartStep;
-			int32_t hmz0cK;								// the starting step position less the starting Z height, multiplied by the Z movement fraction and K
+			uint32_t hmz0sK;							// the starting step position less the starting Z height, multiplied by the Z movement fraction and K
 			int32_t minusAaPlusBbTimesKs;
 			int64_t dSquaredMinusAsquaredMinusBsquaredTimesKsquaredSsquared;
-			uint64_t twoCsquaredTimesMmPerStepDivAK;
+			uint64_t twoCsquaredTimesMmPerStepDivAK;	// this could be stored in the DDA if all towers use the same steps/mm
 
 			// The following depend on how the move is executed, so they must be set up in Prepare()
 			uint32_t accelStopDsK;
@@ -91,6 +96,7 @@ public:
 	static const uint32_t NoStepTime = 0xFFFFFFFF;		// value to indicate that no further steps are needed when calculating the next step time
 	static const uint32_t K1 = 1024;					// a power of 2 used to multiply the value mmPerStepTimesCdivtopSpeed to reduce rounding errors
 	static const uint32_t K2 = 1024;					// a power of 2 used in delta calculations to reduce rounding errors
+	static const int32_t Kc = 4096;						// a power of 2 for scaling the Z movement fraction
 };
 
 #endif /* DRIVEMOVEMENT_H_ */

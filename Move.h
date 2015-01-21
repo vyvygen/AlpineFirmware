@@ -80,7 +80,7 @@ public:
     void Spin();										// Called in a tight loop to keep the class going
     void Exit();										// Shut down
     void GetCurrentUserPosition(float m[DRIVES + 1], bool disableDeltaMapping) const;	// Return the position (after all queued moves have been executed) in transformed coords
-    void LiveCoordinates(float m[DRIVES + 1]);				// Gives the last point at the end of the last complete DDA transformed to user coords
+    void LiveCoordinates(float m[DRIVES]);				// Gives the last point at the end of the last complete DDA transformed to user coords
     void Interrupt();									// The hardware's (i.e. platform's)  interrupt should call this.
     void InterruptTime();								// Test function - not used
     bool AllMovesAreFinished();							// Is the look-ahead ring empty?  Stops more moves being added as well.
@@ -116,6 +116,7 @@ public:
     DeltaParameters& AccessDeltaParams() { return deltaParams; }
     bool IsDeltaMode() const { return deltaParams.IsDeltaMode(); }
 
+    void CurrentMoveCompleted();						// signals that the current move has just been completed
     bool StartNextMove(uint32_t startTime);				// start the next move, returning true if Step() needs to be called immediately
     void DeltaTransform(const float machinePos[AXES], int32_t motorPos[AXES]) const;				// Convert Cartesian coordinates to delta motor coordinates
     void MachineToEndPoint(const int32_t motorPos[], float machinePos[], size_t numDrives) const;	// Convert motor coordinates to machine coordinates
@@ -154,7 +155,7 @@ private:
     bool addNoMoreMoves;								// If true, allow no more moves to be added to the look-ahead
     bool active;										// Are we live and running?
     float currentFeedrate;								// Err... the current feed rate...
-    volatile float liveCoordinates[DRIVES + 1];			// The endpoint that the machine moved to in the last completed move
+    volatile float liveCoordinates[DRIVES];				// The endpoint that the machine moved to in the last completed move
     volatile bool liveCoordinatesValid;					// True if the XYZ live coordinates are reliable (the extruder ones always are)
     volatile int32_t liveEndPoints[AXES];				// The XYZ endpoints of the last completed move in motor coordinates
     float xBedProbePoints[NUMBER_OF_PROBE_POINTS];		// The X coordinates of the points on the bed at which to probe

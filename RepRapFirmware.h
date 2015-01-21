@@ -50,6 +50,7 @@ class FileStore;
 extern RepRap reprap;
 
 // Functions and globals not part of any class
+const size_t MaxFilenameLength = 100;					// maximum length of a path + filename on the SD card
 
 extern "C" void debugPrintf(const char* fmt, ...);
 

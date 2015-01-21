@@ -544,7 +544,7 @@ void RepRap::GetStatusResponse(StringRef& response, uint8_t type) const
 		}
 
 		// Send XYZ positions
-		float liveCoordinates[DRIVES + 1];
+		float liveCoordinates[DRIVES];
 		reprap.GetMove()->LiveCoordinates(liveCoordinates);
 		const Tool* currentTool = reprap.GetCurrentTool();
 		if (currentTool != NULL)
@@ -599,7 +599,7 @@ void RepRap::GetStatusResponse(StringRef& response, uint8_t type) const
 			response.catf("\"%.1f\",", reprap.GetHeat()->GetTemperature(heater));
 		}
 		// Send XYZ and extruder positions
-		float liveCoordinates[DRIVES + 1];
+		float liveCoordinates[DRIVES];
 		reprap.GetMove()->LiveCoordinates(liveCoordinates);
 		for (int8_t drive = 0; drive < DRIVES; drive++)	// loop through extruders
 		{

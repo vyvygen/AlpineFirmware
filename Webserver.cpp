@@ -1642,16 +1642,16 @@ void Webserver::FtpInterpreter::ProcessLine()
 			}
 			else if (StringStartsWith(clientMessage, "RNTO"))
 			{
-				char buffer[maxFilenameLength];
-				strncpy(buffer, filename, maxFilenameLength);
+				char buffer[MaxFilenameLength];
+				strncpy(buffer, filename, MaxFilenameLength);
 				ReadFilename(4);
 
 				if (buffer[0] != '/' && filename[0] != '/')
 				{
-					char old_filename[maxFilenameLength];
+					char old_filename[MaxFilenameLength];
 					const char *new_filename;
 
-					strncpy(old_filename, platform->GetMassStorage()->CombineName(currentDir, buffer), maxFilenameLength);
+					strncpy(old_filename, platform->GetMassStorage()->CombineName(currentDir, buffer), MaxFilenameLength);
 					new_filename = platform->GetMassStorage()->CombineName(currentDir, filename);
 
 					if (platform->GetMassStorage()->Rename(old_filename, new_filename))
@@ -1881,7 +1881,7 @@ void Webserver::FtpInterpreter::ReadFilename(int start)
 {
 	int filenameLength = 0;
 	bool readingPath = false;
-	for(int i=start; i<clientPointer && i<maxFilenameLength + start -1; i++)
+	for(int i=start; i<clientPointer && i<MaxFilenameLength + start -1; i++)
 	{
 		switch (clientMessage[i])
 		{
@@ -1911,14 +1911,14 @@ void Webserver::FtpInterpreter::ReadFilename(int start)
 
 void Webserver::FtpInterpreter::ChangeDirectory(const char *newDirectory)
 {
-	char combinedPath[maxFilenameLength];
+	char combinedPath[MaxFilenameLength];
 
 	if (newDirectory[0] != 0)
 	{
 		/* Prepare the new directory path */
 		if (newDirectory[0] == '/') // absolute path
 		{
-			strncpy(combinedPath, newDirectory, maxFilenameLength);
+			strncpy(combinedPath, newDirectory, MaxFilenameLength);
 		}
 		else // relative path
 		{
@@ -1932,7 +1932,7 @@ void Webserver::FtpInterpreter::ChangeDirectory(const char *newDirectory)
 				}
 				else
 				{
-					strncpy(combinedPath, currentDir, maxFilenameLength);
+					strncpy(combinedPath, currentDir, MaxFilenameLength);
 					for(int i=strlen(combinedPath) -2; i>=0; i--)
 					{
 						if (combinedPath[i] == '/')
@@ -1945,12 +1945,12 @@ void Webserver::FtpInterpreter::ChangeDirectory(const char *newDirectory)
 			}
 			else // go to child directory
 			{
-				strncpy(combinedPath, currentDir, maxFilenameLength);
+				strncpy(combinedPath, currentDir, MaxFilenameLength);
 				if (strlen(currentDir) > 1)
 				{
-					strncat(combinedPath, "/", maxFilenameLength - strlen(combinedPath) - 1);
+					strncat(combinedPath, "/", MaxFilenameLength - strlen(combinedPath) - 1);
 				}
-				strncat(combinedPath, newDirectory, maxFilenameLength - strlen(combinedPath) - 1);
+				strncat(combinedPath, newDirectory, MaxFilenameLength - strlen(combinedPath) - 1);
 			}
 		}
 
@@ -1963,7 +1963,7 @@ void Webserver::FtpInterpreter::ChangeDirectory(const char *newDirectory)
 		/* Verify path and change it */
 		if (platform->GetMassStorage()->PathExists(combinedPath))
 		{
-			strncpy(currentDir, combinedPath, maxFilenameLength);
+			strncpy(currentDir, combinedPath, MaxFilenameLength);
 			SendReply(250, "Directory successfully changed.");
 		}
 		else

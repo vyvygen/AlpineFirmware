@@ -25,9 +25,9 @@ M665 R105.6 L215.0 B85 H234			; set delta radius, diagonal rod length, bed radiu
 M666 X0 Y0 Z0						; put your endstop adjustments here
 M92 X80 Y80 Z80						; Set axis steps/mm
 M906 X800 Y800 Z800 E800			; Set motor currents (mA)
-M201 X800 Y800 Z800 E1000			; Accelerations (mm/s^2)
+M201 X3000 Y3000 Z3000 E9000		; Accelerations (mm/s^2)
 M203 X15000 Y15000 Z15000 E3600		; Maximum speeds (mm/min)
-M566 X600 Y600 Z600 E120			; Maximum instant speed changes mm/minute
+M566 X1200 Y1200 Z1200 E1200		; Maximum instant speed changes mm/minute
 
 ; Thermistors
 ;*** If you have a Duet board stickered "4.7K", change R1000 to R4700 to the following M305 commands

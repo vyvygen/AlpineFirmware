@@ -51,7 +51,7 @@ public:
 	void MoveAborted();
 	void SetFeedRate(float rate) { requestedSpeed = rate; }
 	float GetEndCoordinate(size_t drive, bool disableDeltaMapping);
-	bool FetchEndPosition(int32_t ep[DRIVES], float endCoords[AXES]);
+	bool FetchEndPosition(volatile int32_t ep[DRIVES], volatile float endCoords[AXES]);
     void SetPositions(const float move[]);							// Force the endpoints to be these
 
 	void DebugPrint() const;
@@ -92,7 +92,7 @@ private:
 
     // These are used only in delta calculations
     float a2plusb2;							// Sum of the squares of the X and Y movement fractions
-    int32_t cK;								// The Z movement fraction multiplied by K and converted to integer
+    int32_t cKc;							// The Z movement fraction multiplied by Kc and converted to integer
 
     // These vary depending on how we connect the move with its predecessor and successor, but remain constant while the move is being executed
 	float startSpeed;
@@ -100,9 +100,6 @@ private:
 	float topSpeed;
 	float accelDistance;
 	float decelDistance;
-	float accelStopTime;
-	float decelStartTime;
-	float totalTime;
 
 	// This is a temporary, used to keep track of the lookahead to avoid making recursive calls
 	float targetNextSpeed;					// The speed that the next move would like to start at

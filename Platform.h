@@ -349,7 +349,7 @@ protected:
 
 private:
 
-  char scratchString[STRING_LENGTH];
+  char combinedName[MaxFilenameLength + 1];
   Platform* platform;
   FATFS fileSystem;
   DIR findDir;

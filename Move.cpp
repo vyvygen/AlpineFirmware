@@ -141,7 +141,7 @@ void Move::Init()
 	addNoMoreMoves = false;
 
 	size_t slow = reprap.GetPlatform()->SlowestDrive();
-	currentFeedrate = liveCoordinates[DRIVES] = reprap.GetPlatform()->HomeFeedRate(slow);
+	currentFeedrate = reprap.GetPlatform()->HomeFeedRate(slow);
 
 	SetIdentityTransform();
 	tanXY = tanYZ = tanXZ = 0.0;
@@ -341,7 +341,7 @@ int32_t Move::MotorEndPointToMachine(size_t drive, float coord)
 
 // Convert motor coordinates to machine coordinates
 // This is computationally expensive on a delta, so only call it when necessary, and never from the step ISR.
-void Move::MachineToEndPoint(const int32_t motorPos[DRIVES], float machinePos[DRIVES], size_t numDrives) const
+void Move::MachineToEndPoint(const int32_t motorPos[], float machinePos[], size_t numDrives) const
 {
 	if (IsDeltaMode())
 	{
@@ -661,18 +661,20 @@ void Move::Interrupt()
 	}
 }
 
+// This is called from the step ISR when the current move has been completed
+void Move::CurrentMoveCompleted()
+{
+	// Save the current motor coordinates, and the machine Cartesian coordinates if known
+	liveCoordinatesValid = currentDda->FetchEndPosition(const_cast<int32_t*>(liveEndPoints), const_cast<float *>(liveCoordinates));
+
+	currentDda->Release();
+	currentDda = nullptr;
+	ddaRingGetPointer = ddaRingGetPointer->GetNext();
+}
+
+// Start the next move.
 bool Move::StartNextMove(uint32_t startTime)
 {
-	if (currentDda != nullptr)
-	{
-		// Save the current motor coordinates, and the machine Cartesian coordinates if known
-		liveCoordinatesValid = currentDda->FetchEndPosition(const_cast<int32_t*>(liveEndPoints), const_cast<float *>(liveCoordinates));
-
-		currentDda->Release();
-		currentDda = nullptr;
-		ddaRingGetPointer = ddaRingGetPointer->GetNext();
-	}
-
 	if (ddaRingGetPointer->GetState() == DDA::frozen)
 	{
 		currentDda = ddaRingGetPointer;
@@ -703,7 +705,7 @@ void Move::HitLowStop(size_t drive, DDA* hitDDA)
 			// OR executing the first move of a G32 and Z axis has not yet been homed
 			// Transform the height first so that the height is correct in user coordinates
 			lastZHit = 0.0;								// in case this is the first move of a G32
-			float xyzPoint[DRIVES + 1];
+			float xyzPoint[DRIVES];
 			LiveCoordinates(xyzPoint);
 			xyzPoint[Z_AXIS] = reprap.GetPlatform()->ZProbeStopHeight();
 			Transform(xyzPoint);
@@ -764,29 +766,50 @@ void Move::GetCurrentUserPosition(float m[DRIVES + 1], bool disableDeltaMapping)
 }
 
 // Return the current live XYZ and extruder coordinates
-void Move::LiveCoordinates(float m[DRIVES + 1])
+// Interrupts are assumed enabled on entry, so do not call this from an ISR
+void Move::LiveCoordinates(float m[DRIVES])
 {
-	if (!liveCoordinatesValid)
+	// The live coordinates and live endpoints are modified by the ISR, to be careful to get a self-consistent set of them
+	cpu_irq_disable();
+	if (liveCoordinatesValid)
 	{
-		MachineToEndPoint(const_cast<const int32_t *>(liveEndPoints), const_cast<float *>(liveCoordinates), AXES);
-		liveCoordinatesValid = true;
+		// All coordinates are valid, so copy them across
+		memcpy(m, const_cast<const float *>(liveCoordinates), sizeof(m[0]) * DRIVES);
+		cpu_irq_enable();
 	}
-	for(size_t drive = 0; drive <= DRIVES; drive++)
+	else
 	{
-		m[drive] = liveCoordinates[drive];
+		// Only the extruder coordinates are valid, so we need to convert the motor endpoints to coordinates
+		memcpy(m + AXES, const_cast<const float *>(liveCoordinates + AXES), sizeof(m[0]) * (DRIVES - AXES));
+		int32_t tempEndPoints[AXES];
+		memcpy(tempEndPoints, const_cast<const int32_t*>(liveEndPoints), sizeof(tempEndPoints));
+		cpu_irq_enable();
+		MachineToEndPoint(tempEndPoints, m, AXES);		// this is slow, so do it with interrupts enabled
+
+		// If the ISR has not updated the endpoints, store the live coordinates back so that we don't need to do it again
+		cpu_irq_disable();
+		if (memcmp(tempEndPoints, const_cast<const int32_t*>(liveEndPoints), sizeof(tempEndPoints)) == 0)
+		{
+			memcpy(const_cast<float *>(liveCoordinates), m, sizeof(m[0]) * AXES);
+			liveCoordinatesValid = true;
+		}
+		cpu_irq_enable();
 	}
 	InverseTransform(m);
 }
 
 // These are the actual numbers that we want to be the coordinates, so don't transform them.
+// Interrupts are assumed enabled on entry, so do not call this from an ISR
 void Move::SetLiveCoordinates(const float coords[])
 {
+	cpu_irq_disable();
 	for(size_t drive = 0; drive <= DRIVES; drive++)
 	{
 		liveCoordinates[drive] = coords[drive];
 	}
 	liveCoordinatesValid = true;
 	EndPointToMachine(coords, const_cast<int32_t *>(liveEndPoints), AXES);
+	cpu_irq_enable();
 }
 
 void Move::SetXBedProbePoint(int index, float x)
