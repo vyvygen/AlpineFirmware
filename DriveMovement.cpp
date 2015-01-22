@@ -273,7 +273,7 @@ uint32_t DriveMovement::CalcNextStepTimeDelta(const DDA &dda, size_t drive)
 	if ((int32_t)nextStepTime < (int32_t)(lastStepTime + 40))
 	{
 		stepError = true;
-//		debugPrintf("%u %u %u %d %d %d %u\n", nextStep, nextStepTime, lastStepTime, dsK, t1, t2, mp.delta.hmz0sK);
+//		debugPrintf("%u %u %u %d %d %d %d\n", nextStep, nextStepTime, lastStepTime, dsK, t1, t2, mp.delta.hmz0sK);
 		return NoStepTime;
 	}
 	return nextStepTime;
@@ -303,7 +303,7 @@ void DriveMovement::DebugPrint(char c, bool isDeltaMovement) const
 #if CACHE_startSpeedTimesCdivAsquared
 					"sstcda2=%" PRIu64
 #endif
-					" adtcdtsmac=%d tstcdapdsc=%u tstdca2=%" PRIu64 "\n",
+					" acmadtcdts=%d tstcdapdsc=%u tstdca2=%" PRIu64 "\n",
 					c, (stepError) ? " ERR:" : ":", (direction) ? 'F' : 'B', totalSteps, nextStep, startSpeedTimesCdivA,
 #if CACHE_startSpeedTimesCdivAsquared
 					startSpeedTimesCdivAsquared,
@@ -312,7 +312,7 @@ void DriveMovement::DebugPrint(char c, bool isDeltaMovement) const
 
 		if (isDeltaMovement)
 		{
-			debugPrintf("revss=%d hmz0cK=%d minusAaPlusBbTimesKs=%d dSquaredMinusAsquaredMinusBsquared=%" PRId64 "\n"
+			debugPrintf("revss=%d hmz0sK=%d minusAaPlusBbTimesKs=%d dSquaredMinusAsquaredMinusBsquared=%" PRId64 "\n"
 						"2c2mmsdak=%" PRIu64 " asdsk=%u dsdsk=%u mmstcdts=%u\n",
 						mp.delta.reverseStartStep, mp.delta.hmz0sK, mp.delta.minusAaPlusBbTimesKs, mp.delta.dSquaredMinusAsquaredMinusBsquaredTimesKsquaredSsquared,
 						mp.delta.twoCsquaredTimesMmPerStepDivAK, mp.delta.accelStopDsK, mp.delta.decelStartDsK, mp.delta.mmPerStepTimesCdivtopSpeedK

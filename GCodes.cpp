@@ -450,7 +450,7 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 		}
 	}
 
-	// If axes have been homed on a delta printer, check for movements outside limits.
+	// If axes have been homed on a delta printer and this isn't a homing move, check for movements outside limits.
 	// Skip this check if axes have not been homed, so that extruder-only moved are allowed before homing
 	if (applyLimits && reprap.GetMove()->IsDeltaMode() && AllAxesAreHomed())
 	{
@@ -462,6 +462,9 @@ bool GCodes::LoadMoveBufferFromGCode(GCodeBuffer *gb, bool doingG92, bool applyL
 			moveBuffer[X_AXIS] *= factor;
 			moveBuffer[Y_AXIS] *= factor;
 		}
+
+		// Constrain the end height of the move to be no greater than the homed height and no lower than -0.2mm
+		moveBuffer[Z_AXIS] = max<float>(-0.2, min<float>(moveBuffer[Z_AXIS], reprap.GetMove()->GetDeltaParams().GetHomedHeight()));
 	}
 
 	return true;
@@ -3390,7 +3393,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			{
 				if (params.IsDeltaMode())
 				{
-					reply.printf("Delta diagonal: %.1f, delta radius: %.1f, homed height: %.1f, bed radius: %1f\n",
+					reply.printf("Delta diagonal: %.2f, delta radius: %.2f, homed height: %.2f, bed radius: %1f\n",
 							params.GetDiagonal()/distanceScale, params.GetRadius()/distanceScale,
 							params.GetHomedHeight()/distanceScale, params.GetPrintRadius()/distanceScale);
 				}
@@ -3423,7 +3426,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 		}
 		if (!seen)
 		{
-			reply.printf("Endstop adjustments X: %.1f Y: %.1f Z: %.1f\n",
+			reply.printf("Endstop adjustments X: %.2f Y: %.2f Z: %.2f\n",
 							params.GetEndstopAdjustment(X_AXIS), params.GetEndstopAdjustment(Y_AXIS), params.GetEndstopAdjustment(Z_AXIS));
 		}
 	}

@@ -77,7 +77,7 @@ public:
 		{
 			// The following don't depend on how the move is executed, so they can be set up in Init
 			uint32_t reverseStartStep;
-			uint32_t hmz0sK;							// the starting step position less the starting Z height, multiplied by the Z movement fraction and K
+			int32_t hmz0sK;								// the starting step position less the starting Z height, multiplied by the Z movement fraction and K (can go negative)
 			int32_t minusAaPlusBbTimesKs;
 			int64_t dSquaredMinusAsquaredMinusBsquaredTimesKsquaredSsquared;
 			uint64_t twoCsquaredTimesMmPerStepDivAK;	// this could be stored in the DDA if all towers use the same steps/mm

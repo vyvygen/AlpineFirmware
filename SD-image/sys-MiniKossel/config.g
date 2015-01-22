@@ -21,11 +21,12 @@ M569 P2 S1							; Drive 2 goes forwards
 M569 P3 S1							; Drive 3 goes forwards
 M569 P4 S1							; Drive 4 goes forwards
 M574 X2 Y2 Z2 P1					; set endstop configuration (all endstops at high end, active high)
-M665 R105.6 L215.0 B85 H234			; set delta radius, diagonal rod length, bed radius and homed height
+;*** The homed height is deliberately set too high in the following - you will adjust it during calibration
+M665 R105.6 L215.0 B85 H240			; set delta radius, diagonal rod length, printable radius and homed height
 M666 X0 Y0 Z0						; put your endstop adjustments here
 M92 X80 Y80 Z80						; Set axis steps/mm
 M906 X800 Y800 Z800 E800			; Set motor currents (mA)
-M201 X3000 Y3000 Z3000 E9000		; Accelerations (mm/s^2)
+M201 X1000 Y1000 Z1000 E1000		; Accelerations (mm/s^2)
 M203 X15000 Y15000 Z15000 E3600		; Maximum speeds (mm/min)
 M566 X1200 Y1200 Z1200 E1200		; Maximum instant speed changes mm/minute
 
