@@ -25,7 +25,7 @@ enum PointCoordinateSet
 class DeltaParameters
 {
 public:
-	DeltaParameters();
+	DeltaParameters() { Init(); }
 
 	bool IsDeltaMode() const { return deltaMode; }
 	float GetDiagonal() const { return diagonal; }
@@ -37,6 +37,7 @@ public:
     float GetHomedCarriageHeight(size_t axis) const { return homedCarriageHeight + endstopAdjustments[axis]; }
     float GetPrintRadiusSquared() const { return printRadiusSquared; }
 
+    void Init();
     void SetDiagonal(float d) { diagonal = d; Recalc(); }
     void SetRadius(float r);
     void SetEndstopAdjustment(float x, size_t axis) { endstopAdjustments[axis] = x; }

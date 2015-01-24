@@ -58,6 +58,7 @@ public:
 
 	static const uint32_t stepClockRate = VARIANT_MCK/32;			// the frequency of the clock used for stepper pulse timing (using TIMER_CLOCK3), about 0.38us resolution
 	static const uint64_t stepClockRateSquared = (uint64_t)stepClockRate * stepClockRate;
+	static const int32_t MinStepTime = (10000000/stepClockRate);	// the smallest sensible interval between steps (10us)
 
 private:
 	static const uint32_t minInterruptInterval = 6;					// about 2us minimum interval between interrupts, in clocks
@@ -67,6 +68,7 @@ private:
 	void RecalculateMove();
 	void CalcNewSpeeds();
 	void ReduceHomingSpeed(float newSpeed, size_t endstopDrive);	// called to reduce homing speed when a near-endstop is triggered
+	void DebugPrintVector(const char *name, const float *vec, size_t len) const;
 
     static float Normalise(float v[], size_t dim1, size_t dim2);  	// Normalise a vector of dim1 dimensions to unit length in the first dim1 dimensions
     static void Absolute(float v[], size_t dimensions);				// Put a vector in the positive hyperquadrant

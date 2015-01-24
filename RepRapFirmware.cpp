@@ -179,6 +179,7 @@ void RepRap::Init()
   debug = 0;
   activeExtruders = 1;		// we always report at least 1 extruder to the web interface
   activeHeaters = 2;		// we always report the bed heater + 1 extruder heater to the web interface
+  processingConfig = true;
 
   // All of the following init functions must execute reasonably quickly before the watchdog times us out
   platform->Init();
@@ -230,6 +231,7 @@ void RepRap::Init()
 		  }
 	  }
   }
+  processingConfig = false;
 
   platform->AppendMessage(HOST_MESSAGE, "\nStarting network...\n");
   network->Init(); // Need to do this here, as the configuration GCodes may set IP address etc.
@@ -504,7 +506,10 @@ void RepRap::GetStatusResponse(StringRef& response, uint8_t type) const
 	{
 		// New-style status request
 		// Send the printing/idle status
-		char ch = (reprap.IsStopped()) ? 'S' : (gc->PrintingAFile()) ? 'P' : 'I';
+		char ch = (processingConfig) ? 'C'
+					: (reprap.IsStopped()) ? 'S'
+					: (gc->PrintingAFile()) ? 'P'
+					: 'I';
 		response.printf("{\"status\":\"%c\",\"heaters\":", ch);
 
 		// Send the heater actual temperatures

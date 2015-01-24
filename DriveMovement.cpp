@@ -49,7 +49,7 @@ void DriveMovement::PrepareCartesianAxis(const DDA& dda, const PrepParams& param
 void DriveMovement::PrepareDeltaAxis(const DDA& dda, const PrepParams& params, size_t drive)
 {
 	const float stepsPerMm = reprap.GetPlatform()->DriveStepsPerUnit(drive);
-	mp.delta.twoCsquaredTimesMmPerStepDivAK = (uint64_t)(((float)DDA::stepClockRate * (float)DDA::stepClockRate)/(stepsPerMm * dda.acceleration * K2)) * 2;
+	mp.delta.twoCsquaredTimesMmPerStepDivAK = (uint32_t)((float)DDA::stepClockRateSquared/(stepsPerMm * dda.acceleration * (K2/2)));
 
 	// Acceleration phase parameters
 	mp.delta.accelStopDsK = (uint32_t)(dda.accelDistance * stepsPerMm * K2);
@@ -160,6 +160,48 @@ void DriveMovement::PrepareExtruder(const DDA& dda, const PrepParams& params, si
 	}
 }
 
+void DriveMovement::DebugPrint(char c, bool isDeltaMovement) const
+{
+	if (moving || stepError)
+	{
+		debugPrintf("DM%c%s dir=%c steps=%u next=%u sstcda=%u "
+#if CACHE_startSpeedTimesCdivAsquared
+					"sstcda2=%" PRIu64 " "
+#endif
+					"acmadtcdts=%d tstcdapdsc=%u tstdca2=%" PRIu64 "\n",
+					c, (stepError) ? " ERR:" : ":", (direction) ? 'F' : 'B', totalSteps, nextStep, startSpeedTimesCdivA,
+#if CACHE_startSpeedTimesCdivAsquared
+					startSpeedTimesCdivAsquared,
+#endif
+					accelClocksMinusAccelDistanceTimesCdivTopSpeed, topSpeedTimesCdivAPlusDecelStartClocks, twoDistanceToStopTimesCsquaredDivA);
+
+		if (isDeltaMovement)
+		{
+			debugPrintf("revss=%d hmz0sK=%d minusAaPlusBbTimesKs=%d dSquaredMinusAsquaredMinusBsquared=%" PRId64 "\n"
+						"2c2mmsdak=%u asdsk=%u dsdsk=%u mmstcdts=%u\n",
+						mp.delta.reverseStartStep, mp.delta.hmz0sK, mp.delta.minusAaPlusBbTimesKs, mp.delta.dSquaredMinusAsquaredMinusBsquaredTimesKsquaredSsquared,
+						mp.delta.twoCsquaredTimesMmPerStepDivAK, mp.delta.accelStopDsK, mp.delta.decelStartDsK, mp.delta.mmPerStepTimesCdivtopSpeedK
+						);
+		}
+		else
+		{
+			debugPrintf("accelStopStep=%u decelStartStep=%u revStartStep=%u nextStep=%u nextStepTime=%u 2CsqtMmPerStepDivA=%" PRIu64 "\n",
+						mp.cart.accelStopStep, mp.cart.decelStartStep, mp.cart.reverseStartStep, nextStep, nextStepTime, mp.cart.twoCsquaredTimesMmPerStepDivA
+						);
+			debugPrintf(" mmPerStepTimesCdivtopSpeed=%u fmsdmtstdca2=%" PRId64 "\n",
+						mp.cart.mmPerStepTimesCdivtopSpeed, mp.cart.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA
+						);
+		}
+	}
+	else
+	{
+		debugPrintf("DM%c: not moving\n", c);
+	}
+}
+
+// The remaining functions are speed-critical, so use full optimisation
+#pragma GCC optimize ("O3")
+
 // Calculate the time since the start of the move when the next step for the specified DriveMovement is due
 uint32_t DriveMovement::CalcNextStepTimeCartesian(size_t drive)
 {
@@ -202,7 +244,7 @@ uint32_t DriveMovement::CalcNextStepTimeCartesian(size_t drive)
 
 	}
 
-	if ((int32_t)nextStepTime < (int32_t)(lastStepTime + 40))
+	if ((int32_t)nextStepTime < (int32_t)(lastStepTime + DDA::MinStepTime) && nextStep > 1)
 	{
 		stepError = true;
 		return NoStepTime;
@@ -252,9 +294,9 @@ uint32_t DriveMovement::CalcNextStepTimeDelta(const DDA &dda, size_t drive)
 	if ((uint32_t)dsK < mp.delta.accelStopDsK)
 	{
 #if CACHE_startSpeedTimesCdivAsquared
-		nextStepTime = isqrt(startSpeedTimesCdivAsquared + (mp.delta.twoCsquaredTimesMmPerStepDivAK * (uint32_t)dsK)) - startSpeedTimesCdivA;
+		nextStepTime = isqrt(startSpeedTimesCdivAsquared + ((uint64_t)mp.delta.twoCsquaredTimesMmPerStepDivAK * (uint32_t)dsK)) - startSpeedTimesCdivA;
 #else
-		nextStepTime = isqrt(isquare64(startSpeedTimesCdivA) + (mp.delta.twoCsquaredTimesMmPerStepDivAK * (uint32_t)dsK)) - startSpeedTimesCdivA;
+		nextStepTime = isqrt(isquare64(startSpeedTimesCdivA) + ((uint64_t)mp.delta.twoCsquaredTimesMmPerStepDivAK * (uint32_t)dsK)) - startSpeedTimesCdivA;
 #endif
 	}
 	else if ((uint32_t)dsK < mp.delta.decelStartDsK)
@@ -263,14 +305,14 @@ uint32_t DriveMovement::CalcNextStepTimeDelta(const DDA &dda, size_t drive)
 	}
 	else
 	{
-		uint64_t temp = mp.delta.twoCsquaredTimesMmPerStepDivAK * (uint32_t)dsK;
+		uint64_t temp = (uint64_t)mp.delta.twoCsquaredTimesMmPerStepDivAK * (uint32_t)dsK;
 		// Because of possible rounding error when the end speed is zero or very small, we need to check that the square root will work OK
 		nextStepTime = (temp < twoDistanceToStopTimesCsquaredDivA)
 						? topSpeedTimesCdivAPlusDecelStartClocks - isqrt(twoDistanceToStopTimesCsquaredDivA - temp)
 						: topSpeedTimesCdivAPlusDecelStartClocks;
 	}
 
-	if ((int32_t)nextStepTime < (int32_t)(lastStepTime + 40))
+	if ((int32_t)nextStepTime < (int32_t)(lastStepTime + DDA::MinStepTime) && nextStep > 1)
 	{
 		stepError = true;
 //		debugPrintf("%u %u %u %d %d %d %d\n", nextStep, nextStepTime, lastStepTime, dsK, t1, t2, mp.delta.hmz0sK);
@@ -292,45 +334,6 @@ void DriveMovement::ReduceSpeedCartesian(float inverseSpeedfactor, bool isNearEn
 	if (isNearEndstop)
 	{
 		accelClocksMinusAccelDistanceTimesCdivTopSpeed = (int32_t)nextStepTime - (int32_t)(((uint64_t)mp.cart.mmPerStepTimesCdivtopSpeed * nextStep)/K1);
-	}
-}
-
-void DriveMovement::DebugPrint(char c, bool isDeltaMovement) const
-{
-	if (moving || stepError)
-	{
-		debugPrintf("DM%c%s dir=%c steps=%u next=%u sstcda=%u "
-#if CACHE_startSpeedTimesCdivAsquared
-					"sstcda2=%" PRIu64
-#endif
-					" acmadtcdts=%d tstcdapdsc=%u tstdca2=%" PRIu64 "\n",
-					c, (stepError) ? " ERR:" : ":", (direction) ? 'F' : 'B', totalSteps, nextStep, startSpeedTimesCdivA,
-#if CACHE_startSpeedTimesCdivAsquared
-					startSpeedTimesCdivAsquared,
-#endif
-					accelClocksMinusAccelDistanceTimesCdivTopSpeed, topSpeedTimesCdivAPlusDecelStartClocks, twoDistanceToStopTimesCsquaredDivA);
-
-		if (isDeltaMovement)
-		{
-			debugPrintf("revss=%d hmz0sK=%d minusAaPlusBbTimesKs=%d dSquaredMinusAsquaredMinusBsquared=%" PRId64 "\n"
-						"2c2mmsdak=%" PRIu64 " asdsk=%u dsdsk=%u mmstcdts=%u\n",
-						mp.delta.reverseStartStep, mp.delta.hmz0sK, mp.delta.minusAaPlusBbTimesKs, mp.delta.dSquaredMinusAsquaredMinusBsquaredTimesKsquaredSsquared,
-						mp.delta.twoCsquaredTimesMmPerStepDivAK, mp.delta.accelStopDsK, mp.delta.decelStartDsK, mp.delta.mmPerStepTimesCdivtopSpeedK
-						);
-		}
-		else
-		{
-			debugPrintf("accelStopStep=%u decelStartStep=%u revStartStep=%u nextStep=%u nextStepTime=%u 2CsqtMmPerStepDivA=%" PRIu64 "\n",
-						mp.cart.accelStopStep, mp.cart.decelStartStep, mp.cart.reverseStartStep, nextStep, nextStepTime, mp.cart.twoCsquaredTimesMmPerStepDivA
-						);
-			debugPrintf(" mmPerStepTimesCdivtopSpeed=%u fmsdmtstdca2=%" PRId64 "\n",
-						mp.cart.mmPerStepTimesCdivtopSpeed, mp.cart.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA
-						);
-		}
-	}
-	else
-	{
-		debugPrintf("DM%c: not moving\n", c);
 	}
 }
 

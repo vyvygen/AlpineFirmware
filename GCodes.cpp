@@ -72,7 +72,7 @@ void GCodes::Init()
 	longWait = platform->Time();
 	dwellTime = longWait;
 	limitAxes = true;
-	axisIsHomed[X_AXIS] = axisIsHomed[Y_AXIS] = axisIsHomed[Z_AXIS] = false;
+	SetAllAxesNotHomed();
 	toolChangeSequence = 0;
 	coolingInverted = false;
 }
@@ -768,9 +768,7 @@ bool GCodes::HomeCartesian(StringRef& reply, bool& error)
 		if (!homing)
 		{
 			homing = true;
-			axisIsHomed[X_AXIS] = false;
-			axisIsHomed[Y_AXIS] = false;
-			axisIsHomed[Z_AXIS] = false;
+			SetAllAxesNotHomed();
 		}
 		if (DoFileMacro(HOME_ALL_G))
 		{
@@ -853,9 +851,7 @@ bool GCodes::HomeDelta(StringRef& reply, bool& error)
 	if (!homing)
 	{
 		homing = true;
-		axisIsHomed[X_AXIS] = false;
-		axisIsHomed[Y_AXIS] = false;
-		axisIsHomed[Z_AXIS] = false;
+		SetAllAxesNotHomed();
 	}
 	if (DoFileMacro(HOME_DELTA_G))
 	{
@@ -1505,7 +1501,7 @@ void GCodes::DisableDrives()
 	{
 		platform->Disable(drive);
 	}
-	axisIsHomed[X_AXIS] = axisIsHomed[Y_AXIS] = axisIsHomed[Z_AXIS] = false;
+	SetAllAxesNotHomed();
 }
 
 // Does what it says.
@@ -2058,7 +2054,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			return false;
 		{
 			bool seen = false;
-			for(uint8_t axis=0; axis<AXES; axis++)
+			for (size_t axis = 0; axis < AXES; axis++)
 			{
 				if (gb->Seen(axisLetters[axis]))
 				{
@@ -2314,18 +2310,27 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 		break;
 
 	case 92: // Set/report steps/mm for some axes
+		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
 		{
+			return false;
+		}
+		{
+			// Save the current position - we may need them later
+			float positionNow[DRIVES];
+			Move *move = reprap.GetMove();
+			move->GetCurrentUserPosition(positionNow, false);
+
 			bool seen = false;
-			for(int8_t axis = 0; axis < AXES; axis++)
+			for(size_t axis = 0; axis < AXES; axis++)
 			{
-				if(gb->Seen(axisLetters[axis]))
+				if (gb->Seen(axisLetters[axis]))
 				{
 					platform->SetDriveStepsPerUnit(axis, gb->GetFValue());
 					seen = true;
 				}
 			}
 
-			if(gb->Seen(extrudeLetter))
+			if (gb->Seen(extrudeLetter))
 			{
 				seen = true;
 				float eVals[DRIVES-AXES];
@@ -2333,21 +2338,28 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 				gb->GetFloatArray(eVals, eCount);
 
 				// The user may not have as many extruders as we allow for, so just set the ones for which a value is provided
-				for(int e = 0; e < eCount; e++)
+				for (int e = 0; e < eCount; e++)
 				{
 					platform->SetDriveStepsPerUnit(AXES + e, eVals[e]);
 				}
 			}
 
-			if(!seen)
+			if (seen)
+			{
+				// On a delta, if we change the drive steps/mm then we need to recalculate the motor positions
+				move->Transform(positionNow);
+				move->SetLiveCoordinates(positionNow);
+				move->SetPositions(positionNow);
+			}
+			else
 			{
 				reply.printf("Steps/mm: X: %.3f, Y: %.3f, Z: %.3f, E: ",
 						platform->DriveStepsPerUnit(X_AXIS), platform->DriveStepsPerUnit(Y_AXIS),
 						platform->DriveStepsPerUnit(Z_AXIS));
-				for(int8_t drive = AXES; drive < DRIVES; drive++)
+				for (size_t drive = AXES; drive < DRIVES; drive++)
 				{
 					reply.catf("%.3f", platform->DriveStepsPerUnit(drive));
-					if(drive < DRIVES-1)
+					if (drive < DRIVES-1)
 					{
 						reply.cat(":");
 					}
@@ -3366,9 +3378,18 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 		break;
 
 	case 665: // Set delta configuration
+		if (!AllMovesAreFinishedAndMoveBufferIsLoaded())
 		{
-			DeltaParameters& params = reprap.GetMove()->AccessDeltaParams();
+			return false;
+		}
+		{
+			float positionNow[DRIVES];
+			Move *move = reprap.GetMove();
+			move->GetCurrentUserPosition(positionNow, false);				// get the current position, we may need it later
+			DeltaParameters& params = move->AccessDeltaParams();
+			bool wasInDeltaMode = params.IsDeltaMode();						// remember whether we were in delta mode
 			bool seen = false;
+
 			if (gb->Seen('L'))
 			{
 				params.SetDiagonal(gb->GetFValue() * distanceScale);
@@ -3389,7 +3410,20 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 				params.SetDeltaHomedHeight(gb->GetFValue() * distanceScale);
 				seen = true;
 			}
-			if (!seen)
+			if (seen)
+			{
+				// If we have changed between Cartesian and Delta mode, we need to reset the motor coordinates to agree with the XYZ xoordinates.
+				// This normally happens only when we process the M665 command in config.g.
+				// Also flag that the machine is not homed.
+				if (params.IsDeltaMode() != wasInDeltaMode)
+				{
+					move->Transform(positionNow);
+					move->SetLiveCoordinates(positionNow);
+					move->SetPositions(positionNow);
+				}
+				SetAllAxesNotHomed();
+			}
+			else
 			{
 				if (params.IsDeltaMode())
 				{

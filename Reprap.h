@@ -90,6 +90,7 @@ class RepRap
     bool stopped;
     bool active;
     bool resetting;
+    bool processingConfig;
     uint16_t activeExtruders;
     uint16_t activeHeaters;
     bool coldExtrude;

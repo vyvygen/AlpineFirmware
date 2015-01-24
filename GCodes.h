@@ -153,6 +153,7 @@ class GCodes
     bool ChangeTool(int newToolNumber);									// Select a new tool
     bool ToolHeatersAtSetTemperatures(const Tool *tool) const;			// Wait for the heaters associated with the specified tool to reach their set temperatures
     bool AllAxesAreHomed() const;										// Return true if all axes are homed
+    void SetAllAxesNotHomed();											// Flag all axes as not homed
 
     Platform* platform;							// The RepRap machine
     bool active;								// Live and running?
@@ -203,7 +204,7 @@ class GCodes
     bool settingBedEquationWithProbe;			// True if we're executing G32 without a macro
     float longWait;								// Timer for things that happen occasionally (seconds)
     bool limitAxes;								// Don't think outside the box.
-    bool axisIsHomed[3];						// These record which of the axes have been homed
+    bool axisIsHomed[AXES];						// These record which of the axes have been homed
     bool waitingForMoveToComplete;
     bool coolingInverted;
     float speedFactor;							// speed factor, including the conversion from mm/min to mm/sec, normally 1/60
@@ -328,6 +329,11 @@ inline bool GCodes::CoolingInverted() const
 inline bool GCodes::AllAxesAreHomed() const
 {
 	return axisIsHomed[X_AXIS] && axisIsHomed[Y_AXIS] && axisIsHomed[Z_AXIS];
+}
+
+inline void GCodes::SetAllAxesNotHomed()
+{
+	axisIsHomed[X_AXIS] = axisIsHomed[Y_AXIS] = axisIsHomed[Z_AXIS] = false;
 }
 
 #endif

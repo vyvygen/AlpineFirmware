@@ -23,14 +23,27 @@ int32_t DDA::GetTimeLeft() const
 			: (int32_t)timeNeeded;
 }
 
+void DDA::DebugPrintVector(const char *name, const float *vec, size_t len) const
+{
+	debugPrintf("%s=", name);
+	for (size_t i = 0; i < len; ++i)
+	{
+		debugPrintf("%c%f", ((i == 0) ? '[' : ' '), vec[i]);
+	}
+	debugPrintf("]");
+}
+
 void DDA::DebugPrint() const
 {
-	debugPrintf("DDA: d=%f vec=", totalDistance);
-	for (size_t i = 0; i < 5; ++i)
+	debugPrintf("DDA:");
+	if (endCoordinatesValid)
 	{
-		debugPrintf("%c%f", ((i == 0) ? '[' : ' '), directionVector[i]);
+		DebugPrintVector(" end", endCoordinates, AXES);
 	}
-	debugPrintf("] a=%f reqv=%f topv=%f startv=%f endv=%f\n"
+
+	debugPrintf(" d=%f", totalDistance);
+	DebugPrintVector(" vec", directionVector, 5);
+	debugPrintf(" a=%f reqv=%f topv=%f startv=%f endv=%f\n"
 				"daccel=%f ddecel=%f fstep=%u\n",
 				acceleration, requestedSpeed, topSpeed, startSpeed, endSpeed,
 				accelDistance, decelDistance, firstStepTime);
@@ -46,10 +59,12 @@ void DDA::DebugPrint() const
 // This is called by Move to initialize all DDAs
 void DDA::Init()
 {
-	// Set the endpoints to zero, because Move asks for them
+	// Set the endpoints to zero, because Move asks for them.
+	// They will be wrong if we are on a delta. We take care of that when we process the M665 command in config.g.
 	for (size_t drive = 0; drive < DRIVES; ++drive)
 	{
 		endPoint[drive] = 0;
+		ddm[drive].stepError = false;
 	}
 	state = empty;
 	endCoordinatesValid = false;
@@ -153,7 +168,8 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 			const DeltaParameters& dparams = reprap.GetMove()->GetDeltaParams();
 			const float initialX = prev->GetEndCoordinate(X_AXIS, false);
 			const float initialY = prev->GetEndCoordinate(Y_AXIS, false);
-			const float a2b2D2 = a2plusb2 * fsquare(dparams.GetDiagonal());
+			const float diagonalSquared = fsquare(dparams.GetDiagonal());
+			const float a2b2D2 = a2plusb2 * diagonalSquared;
 
 			for (size_t drive = 0; drive < AXES; ++drive)
 			{
@@ -162,7 +178,7 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 				const float stepsPerMm = reprap.GetPlatform()->DriveStepsPerUnit(drive);
 				DriveMovement& dm = ddm[drive];
 				const float aAplusbB = A * directionVector[X_AXIS] + B * directionVector[Y_AXIS];
-				const float dSquaredMinusAsquaredMinusBsquared = fsquare(dparams.GetDiagonal()) - fsquare(A) - fsquare(B);
+				const float dSquaredMinusAsquaredMinusBsquared = diagonalSquared - fsquare(A) - fsquare(B);
 				float h0MinusZ0 = sqrtf(dSquaredMinusAsquaredMinusBsquared);
 				dm.mp.delta.hmz0sK = (int32_t)(h0MinusZ0 * stepsPerMm * DriveMovement::K2);
 				dm.mp.delta.minusAaPlusBbTimesKs = -(int32_t)(aAplusbB * stepsPerMm * DriveMovement::K2);
@@ -170,7 +186,7 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 						(int64_t)(dSquaredMinusAsquaredMinusBsquared * fsquare(stepsPerMm * DriveMovement::K2));
 
 				// Calculate the distance at which we need to reverse direction.
-				if (a2plusb2 <= 0)
+				if (a2plusb2 <= 0.0)
 				{
 					// Pure Z movement. We can't use the main calculation because it divides by a2plusb2.
 					dm.direction = (directionVector[Z_AXIS] >= 0.0);
@@ -185,19 +201,28 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 						// Calculate how many steps we need to move up before reversing
 						float hrev = directionVector[Z_AXIS] * drev + sqrt(dSquaredMinusAsquaredMinusBsquared - 2 * drev * aAplusbB - a2plusb2 * fsquare(drev));
 						uint32_t numStepsUp = (uint32_t)((hrev - h0MinusZ0) * stepsPerMm);
-						dm.mp.delta.reverseStartStep = numStepsUp + 1;
 
-						// Correct the initial direction and the total number of steps
-						if (dm.direction)
+						// We may be almost at the peak height already, in which case we don't really have a reversal
+						if (numStepsUp == 0)
 						{
-							// Net movement is up, so we will go up a bit and then down by a lesser amount
-							dm.totalSteps = (2 * numStepsUp) - dm.totalSteps;
+							dm.mp.delta.reverseStartStep = dm.totalSteps + 1;
 						}
 						else
 						{
-							// Net movement is down, so we will go up first and then down by a greater amount
-							dm.direction = true;
-							dm.totalSteps = (2 * numStepsUp) + dm.totalSteps;
+							dm.mp.delta.reverseStartStep = numStepsUp + 1;
+
+							// Correct the initial direction and the total number of steps
+							if (dm.direction)
+							{
+								// Net movement is up, so we will go up a bit and then down by a lesser amount
+								dm.totalSteps = (2 * numStepsUp) - dm.totalSteps;
+							}
+							else
+							{
+								// Net movement is down, so we will go up first and then down by a greater amount
+								dm.direction = true;
+								dm.totalSteps = (2 * numStepsUp) + dm.totalSteps;
+							}
 						}
 					}
 					else
@@ -220,7 +245,9 @@ bool DDA::Init(const float nextMove[], EndstopChecks ce, bool doDeltaMapping)
 	acceleration = VectorBoxIntersection(normalisedDirectionVector, accelerations, DRIVES);
 
 	// Set the speed to the smaller of the requested and maximum speed.
-	requestedSpeed = min<float>(nextMove[DRIVES], VectorBoxIntersection(normalisedDirectionVector, reprap.GetPlatform()->MaxFeedrates(), DRIVES));
+	//FIXME: on a delta, we should limit the net movement in the XY plane to the maximum X or Y speed, instead of limiting them individually
+	// Also enforce a minimum speed of 0.5mm/sec. We need a minimum speed to avoid overflow in the movement calculations.
+	requestedSpeed = max<float>(0.5, min<float>(nextMove[DRIVES], VectorBoxIntersection(normalisedDirectionVector, reprap.GetPlatform()->MaxFeedrates(), DRIVES)));
 
 	// 6. Calculate the provisional accelerate and decelerate distances and the top speed
 	endSpeed = 0.0;					// until the next move asks us to adjust it
@@ -472,9 +499,6 @@ float DDA::GetEndCoordinate(size_t drive, bool disableDeltaMapping)
 	}
 }
 
-// The remaining functions are speed-critical, so use full optimisation
-#pragma GCC optimize ("O3")
-
 // Prepare this DDA for execution
 void DDA::Prepare()
 {
@@ -565,6 +589,9 @@ void DDA::Prepare()
 
 	state = frozen;					// must do this last so that the ISR doesn't start executing it before we have finished setting it up
 }
+
+// The remaining functions are speed-critical, so use full optimisation
+#pragma GCC optimize ("O3")
 
 // Start executing the move, returning true if Step() needs to be called immediately.
 bool DDA::Start(uint32_t tim)

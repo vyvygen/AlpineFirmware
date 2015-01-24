@@ -7,7 +7,7 @@
 
 #include "RepRapFirmware.h"
 
-DeltaParameters::DeltaParameters()
+void DeltaParameters::Init()
 {
     deltaMode = false;
 	diagonal = 0.0;
@@ -105,7 +105,7 @@ Move::Move(Platform* p, GCodes* g) : currentDda(NULL)
 	// Build the DDA ring
 	DDA *dda = new DDA(NULL);
 	ddaRingGetPointer = ddaRingAddPointer = dda;
-	for(unsigned int i = 1; i < DdaRingLength; i++)
+	for(size_t i = 1; i < DdaRingLength; i++)
 	{
 		DDA *oldDda = dda;
 		dda = new DDA(dda);
@@ -117,15 +117,8 @@ Move::Move(Platform* p, GCodes* g) : currentDda(NULL)
 
 void Move::Init()
 {
-	// Put the origin on the lookahead ring with default velocity in the previous
-	// position to the first one that will be used.
-	for (size_t i = 0; i < DRIVES; i++)
-	{
-		liveEndPoints[i] = 0;
-		liveCoordinates[i] = 0.0;
-		reprap.GetPlatform()->SetDirection(i, FORWARDS, false);
-	}
-	liveCoordinatesValid = false;
+	// Reset Cartesian mode
+	deltaParams.Init();
 
 	// Empty the ring
 	ddaRingGetPointer = ddaRingAddPointer;
@@ -137,19 +130,31 @@ void Move::Init()
 	} while (dda != ddaRingAddPointer);
 
 	currentDda = nullptr;
-
 	addNoMoreMoves = false;
+
+	// Clear the transforms
+	SetIdentityTransform();
+	tanXY = tanYZ = tanXZ = 0.0;
+
+	// Put the origin on the lookahead ring with default velocity in the previous position to the first one that will be used.
+	// Do this by calling SetLiveCoordinates and SetPositions, so that the motor coordinates will be correct too even on a delta.
+	float move[DRIVES];
+	for (size_t i = 0; i < DRIVES; i++)
+	{
+		move[i] = 0.0;
+		reprap.GetPlatform()->SetDirection(i, FORWARDS, false);
+	}
+	SetLiveCoordinates(move);
+	SetPositions(move);
 
 	size_t slow = reprap.GetPlatform()->SlowestDrive();
 	currentFeedrate = reprap.GetPlatform()->HomeFeedRate(slow);
 
-	SetIdentityTransform();
-	tanXY = tanYZ = tanXZ = 0.0;
-
 	lastZHit = 0.0;
 	zProbing = false;
 
-	for(size_t point = 0; point < NUMBER_OF_PROBE_POINTS; point++)
+	// Set up default bed probe points. This is only a guess, because we don't know the bed size yet.
+	for (size_t point = 0; point < NUMBER_OF_PROBE_POINTS; point++)
 	{
 		xBedProbePoints[point] = (0.3 + 0.6*(float)(point%2))*reprap.GetPlatform()->AxisMaximum(X_AXIS);
 		yBedProbePoints[point] = (0.0 + 0.9*(float)(point/2))*reprap.GetPlatform()->AxisMaximum(Y_AXIS);
@@ -453,13 +458,11 @@ void Move::InverseDeltaTransform(const int32_t motorPos[AXES], float machinePos[
 			MotorEndpointToPosition(motorPos[C_AXIS], C_AXIS),
 			machinePos);
 
-	//DEBUG#
+	// We don't do inverse transforms very often, so if debugging is enabled, print them
 	if (reprap.Debug(moduleMove))
 	{
 		debugPrintf("Inverse transformed %d %d %d to %f %f %f\n", motorPos[0], motorPos[1], motorPos[2], machinePos[0], machinePos[1], machinePos[2]);
 	}
-//	int32_t temp[AXES];
-//	DeltaTransform(const_cast<float *>(machinePos), temp);
 }
 
 // Convert Cartesian coordinates to delta motor steps
@@ -469,7 +472,8 @@ void Move::DeltaTransform(const float machinePos[AXES], int32_t motorPos[AXES]) 
 	{
 		motorPos[axis] = MotorEndPointToMachine(axis, deltaParams.Transform(machinePos, axis));
 	}
-	if (reprap.Debug(moduleMove))
+
+	if (reprap.Debug(moduleMove) && reprap.Debug(moduleDda))
 	{
 		debugPrintf("Transformed %f %f %f to %d %d %d\n", machinePos[0], machinePos[1], machinePos[2], motorPos[0], motorPos[1], motorPos[2]);
 	}
