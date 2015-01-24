@@ -2315,7 +2315,7 @@ bool GCodes::HandleMcode(GCodeBuffer* gb)
 			return false;
 		}
 		{
-			// Save the current position - we may need them later
+			// Save the current positions as we may need them later
 			float positionNow[DRIVES];
 			Move *move = reprap.GetMove();
 			move->GetCurrentUserPosition(positionNow, false);
