@@ -15,14 +15,14 @@
 #define USE_DMAC	0		// use general DMA controller
 
 #if USE_PDC
-#include "pdc.h"
+#include "pdc/pdc.h"
 #endif
 
 #if USE_DMAC
-#include "dmac.h"
+#include "dmac/dmac.h"
 #endif
 
-#include "matrix.h"
+#include "matrix/matrix.h"
 
 // Functions called by the W5500 module to transfer data to/from the W5500 via SPI
 const uint32_t SpiClockFrequency = 40000000;			// tried 60MHz and we got some data corruption when uploading files, so try 40MHz instead
@@ -33,8 +33,7 @@ static Pdc *spi_pdc;
 
 static inline void spi_rx_dma_enable()
 {
-	pdc_enable_transfer(spi_pdc, PERIPH_PTCR_RXTEN);
-	pdc_enable_transfer(spi_pdc, PERIPH_PTCR_TXTEN);				// we have to transmit in order to receive
+	pdc_enable_transfer(spi_pdc, PERIPH_PTCR_RXTEN | PERIPH_PTCR_TXTEN);	// we have to transmit in order to receive
 }
 
 static inline void spi_tx_dma_enable()
@@ -44,8 +43,7 @@ static inline void spi_tx_dma_enable()
 
 static inline void spi_rx_dma_disable()
 {
-	pdc_disable_transfer(spi_pdc, PERIPH_PTCR_RXTDIS);
-	pdc_disable_transfer(spi_pdc, PERIPH_PTCR_TXTDIS);				// we have to transmit in order to receive
+	pdc_disable_transfer(spi_pdc, PERIPH_PTCR_RXTDIS | PERIPH_PTCR_TXTDIS);	// we have to transmit in order to receive
 }
 
 static inline void spi_tx_dma_disable()
@@ -63,7 +61,7 @@ static void spi_tx_dma_setup(const uint8_t *buf, uint32_t length)
 	pdc_packet_t pdc_spi_packet;
 	pdc_spi_packet.ul_addr = reinterpret_cast<uint32_t>(buf);
 	pdc_spi_packet.ul_size = length;
-	pdc_tx_init(spi_pdc, &pdc_spi_packet, NULL);
+	pdc_tx_init(spi_pdc, &pdc_spi_packet, nullptr);
 }
 
 static void spi_rx_dma_setup(uint8_t *buf, uint32_t length)
@@ -71,8 +69,8 @@ static void spi_rx_dma_setup(uint8_t *buf, uint32_t length)
 	pdc_packet_t pdc_spi_packet;
 	pdc_spi_packet.ul_addr = reinterpret_cast<uint32_t>(buf);
 	pdc_spi_packet.ul_size = length;
-	pdc_rx_init(spi_pdc, &pdc_spi_packet, NULL);
-	pdc_tx_init(spi_pdc, &pdc_spi_packet, NULL);					// we have to transmit in order to receive
+	pdc_rx_init(spi_pdc, &pdc_spi_packet, nullptr);
+	pdc_tx_init(spi_pdc, &pdc_spi_packet, nullptr);					// we have to transmit in order to receive
 }
 
 #endif
@@ -368,6 +366,10 @@ namespace WizSpi
 				--timeout;
 			}
 			spi_rx_dma_disable();
+			if (timeout == 0)
+			{
+				return SPI_ERROR_TIMEOUT;
+			}
 #else
 			const uint32_t dOut = 0x000000FF;
 			SPI->SPI_TDR = dOut;						// send first byte

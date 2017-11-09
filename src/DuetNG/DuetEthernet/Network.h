@@ -2,7 +2,7 @@
 
 RepRapFirmware - Network: RepRapPro Ormerod with Duet controller
 
-Separated out from Platform.h by dc42 and extended by zpl
+Separated out from Platform.h by dc42 and extended by chrishamm
 
 ****************************************************************************************************/
 
@@ -10,9 +10,13 @@ Separated out from Platform.h by dc42 and extended by zpl
 #define NETWORK_H
 
 #include "NetworkDefs.h"
-#include "RepRapFirmware.h"
 #include "MessageType.h"
 #include "Socket.h"
+
+class NetworkResponder;
+class HttpResponder;
+class FtpResponder;
+class TelnetResponder;
 
 // We have 8 sockets available on the W5500.
 const size_t NumHttpSockets = 4;				// sockets 0-3 are for HTTP
@@ -22,7 +26,7 @@ const SocketNumber TelnetSocketNumber = 6;
 const size_t NumTcpSockets = 7;
 const SocketNumber DhcpSocketNumber = 7;		// TODO can we allocate this dynamically when required, to allow more http sockets most of the time?
 
-const size_t NumProtocols = 3;					// number of network protocols we support
+const unsigned int NumHttpResponders = 4;		// the number of concurrent HTTP requests we can process
 
 class Platform;
 
@@ -30,10 +34,8 @@ class Platform;
 class Network
 {
 public:
-	const uint8_t *GetIPAddress() const;
-	void SetIPAddress(const uint8_t p_ipAddress[], const uint8_t p_netmask[], const uint8_t p_gateway[]);
+	Network(Platform& p);
 
-	Network(Platform* p);
 	void Init();
 	void Activate();
 	void Exit();
@@ -46,44 +48,23 @@ public:
 	void DisableProtocol(int protocol, StringRef& reply);
 	void ReportProtocols(StringRef& reply) const;
 
-	bool Lock();
-	void Unlock();
-	bool InLwip() const;
-
-	void Enable();
-	void Disable();
-	bool IsEnabled() const;
-
-	Port GetHttpPort() const;
-	Port GetFtpPort() const;
-	Port GetTelnetPort() const;
+	void Enable(int mode, StringRef& reply);			// enable or disable the network
+	bool GetNetworkState(StringRef& reply);
+	int EnableState() const;
 
 	void SetHostname(const char *name);
 
-	// Interfaces for the Webserver
+	bool FindResponder(Socket *skt, Protocol protocol);
 
-	NetworkTransaction *GetTransaction(Connection conn = NoConnection);
-
+	const uint8_t *GetIPAddress() const { return ipAddress; }
 	void OpenDataPort(Port port);
-	Port GetDataPort() const;
-	void CloseDataPort();
+	void TerminateDataPort();
 
-	void SaveDataConnection() {}
-	void SaveFTPConnection() {}
-	void SaveTelnetConnection() {}
-
-	bool AcquireFTPTransaction() { return AcquireTransaction(FtpSocketNumber); }
-	bool AcquireDataTransaction() { return AcquireTransaction(FtpDataSocketNumber); }
-	bool AcquireTelnetTransaction() { return AcquireTransaction(TelnetSocketNumber); }
-
-	void Defer(NetworkTransaction *tr);
-
-	static Port GetLocalPort(Connection conn);
-	static Port GetRemotePort(Connection conn);
-	static uint32_t GetRemoteIP(Connection conn);
-	static bool IsConnected(Connection conn);
-	static bool IsTerminated(Connection conn);
-	static void Terminate(Connection conn);
+	void HandleHttpGCodeReply(const char *msg);
+	void HandleTelnetGCodeReply(const char *msg);
+	void HandleHttpGCodeReply(OutputBuffer *buf);
+	void HandleTelnetGCodeReply(OutputBuffer *buf);
+	uint32_t GetHttpReplySeq();
 
 private:
 	enum class NetworkState
@@ -92,34 +73,37 @@ private:
 		enabled,					// Network enabled but not started yet
 		establishingLink,			// starting up, waiting for link
 		obtainingIP,				// link established, waiting for DHCP
+		connected,					// just established a connection
 		active						// network running
 	};
 
 	void InitSockets();
 	void TerminateSockets();
 
-	bool AcquireTransaction(size_t socketNumber)
-	pre(socketNumber < NumTcpSockets);
-
-	void StartProtocol(size_t protocol)
+	void StartProtocol(Protocol protocol)
 	pre(protocol < NumProtocols);
 
-	void ShutdownProtocol(size_t protocol)
+	void ShutdownProtocol(Protocol protocol)
 	pre(protocol < NumProtocols);
 
-	void ReportOneProtocol(size_t protocol, StringRef& reply) const
+	void ReportOneProtocol(Protocol protocol, StringRef& reply) const
 	pre(protocol < NumProtocols);
 
-	Platform * const platform;
-	float longWait;
+	void SetIPAddress(const uint8_t p_ipAddress[], const uint8_t p_netmask[], const uint8_t p_gateway[]);
+
+	Platform& platform;
+	NetworkResponder *responders;
+	NetworkResponder *nextResponderToPoll;
+	FtpResponder *ftpResponder;
+	TelnetResponder *telnetResponder;
+	uint32_t longWait;
 	uint32_t lastTickMillis;
 
 	Socket sockets[NumTcpSockets];
 	size_t nextSocketToPoll;						// next TCP socket number to poll for read/write operations
-	size_t currentTransactionSocketNumber;			// the socket number of the last transaction we passed to the web server
 
-    Port portNumbers[NumProtocols];					// port number used for each protocol
-    bool protocolEnabled[NumProtocols];				// whether each protocol is enabled
+	Port portNumbers[NumProtocols];					// port number used for each protocol
+	bool protocolEnabled[NumProtocols];				// whether each protocol is enabled
 
 	NetworkState state;
 	bool activated;

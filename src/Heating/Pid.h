@@ -16,8 +16,6 @@
 #include "FOPDT.h"
 #include "TemperatureError.h"
 
-#define NEW_TUNING	(1)
-
 class PID
 {
 	enum class HeaterMode : uint8_t
@@ -32,19 +30,15 @@ class PID
 		tuning0,
 		tuning1,
 		tuning2,
-#ifdef NEW_TUNING
 		tuning3,
 		lastTuningMode = tuning3
-#else
-		lastTuningMode = tuning2
-#endif
 	};
 
 	static const size_t NumPreviousTemperatures = 4; // How many samples we average the temperature derivative over
 
 public:
 
-	PID(Platform* p, int8_t h);
+	PID(Platform& p, int8_t h);
 	void Init(float pGain, float pTc, float pTd, float tempLimit, bool usePid);	// (Re)Set everything to start
 	void Reset();
 	void Spin();									// Called in a tight loop to keep things running
@@ -86,6 +80,10 @@ public:
 	void SetM301PidParameters(const M301PidParameters& params)
 		{ model.SetM301PidParameters(params); }
 
+#if HAS_VOLTAGE_MONITOR
+	void Suspend(bool sus);							// Suspend the heater to conserve power
+#endif
+
 private:
 
 	void SwitchOn();								// Turn the heater on and set the mode
@@ -94,18 +92,13 @@ private:
 	void DoTuningStep();							// Called on each temperature sample when auto tuning
 	static bool ReadingsStable(size_t numReadings, float maxDiff)
 		pre(numReadings >= 2; numReadings <= MaxTuningTempReadings);
-#ifdef NEW_TUNING
 	static int GetPeakTempIndex();					// Auto tune helper function
 	static int IdentifyPeak(size_t numToAverage);	// Auto tune helper function
 	void CalculateModel();							// Calculate G, td and tc from the accumulated readings
-#else
-	static size_t GetMaxRateIndex();				// Auto tune helper function
-	void FitCurve();								// Calculate G, td and tc from the accumulated readings
-#endif
 	void DisplayBuffer(const char *intro);			// Debug helper
 	float GetExpectedHeatingRate() const;			// Get the minimum heating rate we expect
 
-	Platform* platform;								// The instance of the class that is the RepRap hardware
+	Platform& platform;								// The instance of the class that is the RepRap hardware
 	float activeTemperature;						// The required active temperature
 	float standbyTemperature;						// The required standby temperature
 	float temperatureLimit;							// The maximum allowed temperature for this heater
@@ -128,6 +121,9 @@ private:
 	HeaterMode mode;								// Current state of the heater
 	bool active;									// Are we active or standby?
 	bool tuned;										// True if tuning was successful
+#if HAS_VOLTAGE_MONITOR
+	bool suspended;									// True if suspended to save power
+#endif
 	uint8_t badTemperatureCount;					// Count of sequential dud readings
 
 	static_assert(sizeof(previousTemperaturesGood) * 8 >= NumPreviousTemperatures, "too few bits in previousTemperaturesGood");
@@ -143,18 +139,11 @@ private:
 	static uint32_t tuningPhaseStartTime;			// when we started the current tuning phase
 	static uint32_t tuningReadingInterval;			// how often we are sampling, in milliseconds
 	static size_t tuningReadingsTaken;				// how many temperature samples we have taken
-
-#ifdef NEW_TUNING
 	static float tuningHeaterOffTemp;				// the temperature when we turned the heater off
 	static float tuningPeakTemperature;				// the peak temperature reached, averaged over 3 readings (so slightly less than the true peak)
 	static uint32_t tuningHeatingTime;				// how long we had the heating on for
 	static uint32_t tuningPeakDelay;				// how many milliseconds the temperature continues to rise after turning the heater off
-#else
-	static float tuningTimeOfFastestRate;			// how long after turn-on the fastest temperature rise occurred
-	static float tuningFastestRate;					// the fastest temperature rise
-#endif
 };
-
 
 
 inline bool PID::Active() const

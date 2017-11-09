@@ -15,15 +15,20 @@
 enum class GCodeState : uint8_t
 {
 	normal,												// not doing anything and ready to process a new GCode
-	waitingForMoveToComplete,							// doing a homing move, so we must wait for it to finish before processing another GCode
-	homing,
-	setBed,
+
+	waitingForSpecialMoveToComplete,					// doing a special move, so we must wait for it to finish before processing another GCode
+
+	probingToolOffset,
+
+	homing1,
+	homing2,
 
 	// These next 4 must be contiguous
 	toolChange0,
 	toolChange1,
 	toolChange2,
 	toolChangeComplete,
+
 	// These next 4 must be contiguous
 	m109ToolChange0,
 	m109ToolChange1,
@@ -32,38 +37,71 @@ enum class GCodeState : uint8_t
 
 	pausing1,
 	pausing2,
+
 	resuming1,
 	resuming2,
 	resuming3,
+
 	flashing1,
 	flashing2,
+
 	stopping,
 	sleeping,
-	// These next 5 must be contiguous
+
+	// These next 6 must be contiguous
 	gridProbing1,
 	gridProbing2,
-	gridProbing2a,
 	gridProbing3,
-	gridProbing4
+	gridProbing4,
+	gridProbing5,
+	gridProbing6,
+
+	// These next 8 must be contiguous
+	probingAtPoint0,
+	probingAtPoint1,
+	probingAtPoint2,
+	probingAtPoint3,
+	probingAtPoint4,
+	probingAtPoint5,
+	probingAtPoint6,
+	probingAtPoint7,
+
+	doingFirmwareRetraction,
+	doingFirmwareUnRetraction,
+	loadingFilament,
+	unloadingFilament,
+
+#if HAS_VOLTAGE_MONITOR
+	powerFailPausing1
+#endif
 };
 
 // Class to hold the state of gcode execution for some input source
 class GCodeMachineState
 {
 public:
+	typedef uint32_t ResourceBitmap;
 	GCodeMachineState();
 
 	GCodeMachineState *previous;
 	float feedrate;
 	FileData fileState;
-	uint32_t lockedResources;
+	ResourceBitmap lockedResources;
 	GCodeState state;
+	uint8_t toolChangeParam;
+	int16_t newToolNumber;
 	unsigned int
 		drivesRelative : 1,
 		axesRelative : 1,
 		doingFileMacro : 1,
 		waitWhileCooling : 1,
-		runningM502 : 1;
+		runningM501 : 1,
+		runningM502 : 1,
+		volumetricExtrusion : 1,
+		// Caution: these next 3 will be modified out-of-process when we use RTOS, so they will need to be individual bool variables
+		waitingForAcknowledgement : 1,
+		messageAcknowledged : 1,
+		messageCancelled : 1;
 
 	static GCodeMachineState *Allocate()
 	post(!result.IsLive(); result.state == GCodeState::normal);

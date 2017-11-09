@@ -1,8 +1,328 @@
 Summary of important changes in recent versions
 ===============================================
 
-Version 1.18RC1
-===============
+Version 1.20beta6
+=================
+
+Upgrade notes:
+- If you are using a Duet to control a RepRapPro Ormerod, Huxley Duo or Mendel 3 printer or any other printer that uses the Z probe to do X homing, you need to add line M574 X1 S2 to config.g.
+- If you are using a Duet 06 or 085 and you don't already set the P parameter in your G31 command, add P400 to that command to get the same behaviour as before.
+- If you are using PT100 sensors, make sure you don't have any additional parameters in your M305 commands for those heaters left over from when you were using thermistors. In particular, the R parameter now configures the reference resistor value on the PT100 interface board, and must be omitted or set to 400 when using the Duet3D PT100 daughter board.
+
+New features:
+- Implemented M915 motor load monitoring configuration. Only R0 and R1 actions are implemented at present. See https://duet3d.com/wiki/Stall_detection_and_sensorless_homing.
+- Implemented sensorless homing using motor load monitoring (S3 option in M574 command)
+- M574 command has new options S2 to select the Z probe and S3 to select motor load detection, in place of using an endstop switch
+- M584 can now be used to create additional axes using any of the letters UVWABC in any order
+- The value of the reference resistor on MAX31865 PT100 interface boards can now be configured (thanks bpaczkowski)
+- 3-wire PT100 sensors are now supported (thanks zlowred)
+
+Other changes:
+- XYZ options have been removed from the M558 command. Use the new M574 S2 option instead.
+- G31 P parameter now defaults to 500 instead of 400 on the Duet 06/085 build just as it has done in the other builds
+- X homing no longer defaults to using the Z probe in the Duet 06/085 build
+- M906 and M913 commands no longer wait for all movement to stop, so that M913 cdan be used in the power fail script
+
+Bug fixes:
+- Configuring MAX31856 thermocouple boards sometimes resulted in strange behaviour
+- If a filament error was detected, the print was paused and the resume information was saved, but the pause script was not executed and the Duet needed to be restarted before movement was possible again
+
+Version 1.20beta4
+=================
+
+Bug fixes:
+
+- Resuming a print after pausing still sometimes gave a "low voltage" error if no M911 command had been used
+- Simulation mode didn't work in 1.20b2 or 1.20b3
+
+Version 1.20beta3
+=================
+
+Bug fixes:
+- M500 command wrote extra M307 lines were written to config-override.g in 1.20b2
+- CoreXY homing didn't work in 1.20b2
+- Motor idle detection didn't work in 1.20b2
+- M585 didn't work
+- Resuming a print after pausing gave a "low voltage" error if no M911 command had been used
+- The code to detect M122 early also recognised commands of the form Mxxx122 where xxx were non-numeric
+
+Version 1.20beta2
+=================
+
+Upgrade notes
+- Duet WiFi users can use either DuetWiFiServer 1.20beta2 (which disables WiFi module sleep) or 1.20alpha1 (which uses the default "modem sleep" mode)
+- The parameters to the M911 command (which configures power fail handling) have changed. If you use this command in config.g you will have to change it accordingly.
+- On a Duet WiFi, if your M552 command in config.g includes a P parameter with an IP address, you will need to remove them
+- If you currently have G31 parameters for your active Z probe in config-override.g that are different from the ones in config.g, you should copy them to config.g, otherwise they will be lost next time you run M500.
+
+New and changed features:
+- M500 no longer saves G31 Z probe parameters to confog-override.g
+- A line of GCode may now contain multiple G- and M-commands. The commands are executed sequentially. A command that takes an un-quoted string parameter must be the last command on the line. A T command must be on a line by itself.
+- On SCARA printers, arm position limits are applied as well as XY size limits
+- Heater 0 values are sent to to PanelDue even if there is no heated bed
+- When logging is enabled, a log entry is now written when the date/time is set
+- When logging is enabled, "Maximum open file count exceeded" messages are logged
+- Loss of power is now handled much faster. The print is paused in the middle of a move if necessary. The M911 parameters are changed to facilitate this.
+- Following a power failure, M916 can now be used to resume the print instead of using M98 Presurrect.g
+- The TMC2660 Stallguard detection and Coolstep parameters may now be configured using M915. Currently, no action is performed when a stall is signalled.
+- If a heater fault occurs, the print is paused instead of cancelled
+- The start and end speeds of short segmented moves in accelerating or decalerating sequences are more closely matched where possible, which should give smoother motion
+- All error messages relating to incorrect use of a G- or M-code now include the G- or M-number of the command that caused them
+- Increased ADC oversample bits to 2
+- Duet WiFi: M122 diagnostics now include the wifi module sleep mode and additional network diagnostics
+- You can now disable monitoring of TMC2660 drivers that are not in use by using parameter R-1 in the corresponding M569 command
+- The M585 (probe tool) command is now implemented (thanks chrishamm)
+- If axis lengths are adjusted by probing, a subsequent M500 command saves them in config-override.g
+- If tool offsets are adjusted by probing, a subsequent M500 command saves them in config-override.g 
+- The layer counting mechanism has been modified to better handle GCode files that use a different layer height when printing support
+- Debug messages sent to the USB port are truncated or thrown away if a software watchdog reset is imminent
+- XY speed limiting is now done separately for each kinematics, in particular for CoreXY printers it is more accurate
+- Support for Polar kinematics has been added but not tested, see M669 command
+- The TMC2660 drivers are configured to detect short-to-ground conditions faster
+- The parameters in rr_ http commands are now all order-independent
+
+Bug fixes:
+- An error in computing the time taken to execute moves that were not yet frozen caused the first movement on a SCARA printer following homing to be jerky
+- An extra space in the output from the M114 command confused Pronterface, causing it to print exception messages
+- An error in the motion planning system that could lead to a null pointer dereference has been fixed. It is not known what symptoms (if any) were associated with this bug.
+- When tuning a heater, any previous maximum PWM value that was set is now ignored
+
+
+Version 1.20beta1
+=================
+
+Upgrade notes:
+- If installing this release on a Duet WiFi, install DuetWiFiServer version 1.20 alpha first, available at https://github.com/dc42/DuetWiFiSocketServer/blob/master/Release/DuetWiFiServer.bin.
+- Recommended Duet Web Control version is 1.19.3
+- The 'set output on extrude' function (M571) no longer defaults to FAN0 output. If you use this feature, you must define the output pin explicitly using the P parameter at least once.
+
+New and changed features:
+- Added support for M3, M4, M5 and M450-M453
+- Added support for DHT11, DHT21 and DHT22 temperature/humidity sensors (thanks chrishamm)
+- Some additional events are now logged
+- The grid defined by M557 is now stored separately from the grid loaded by G29 S1 so that they don't overwrite each other
+- The resurrect.g file is no longer created or deleted during a simulated print
+- SCARA prints are simulated without segmentation so that the simulation runs much faster. In tests, the difference in the simulation time with/without segmentation was negligible.
+- The change to fast PID parameters is now made when the temperature is within 3C of the target instead of when within 1C
+- M408 S1/2/3 responses now include dummy values for the bed heater if there is no bed heater
+- The commands to resume printing that are written to resurrect.g now move the head to 2mm above the printing height, then sideways, then down
+
+Bug fixes:
+- If a Duet3D filament sensor was connected and congfigured but flashing an error code instead of sending filament data, the error recovery code running on the Duet caused short pauses in the print
+- On a delta printer if you created additonal axes, when you tried to home them it ran homedelta.g instead of e.g. homeu.g
+- On a delta printer with additional axes, you can now do XYZ moves as soon as the towers have been homed
+- Fixed a possible race condition if the time and date were set at midnight
+- The 4-leadscrew auto/4-screw manual bed levelling code didn't work properly
+- The P parameter was missing from G10 commands written to resurrect.g
+- Arm angle limits are now applied when converting Cartesian to SCARA coordinates
+- The correction limit is no longer applied when computing manual bed levelling screw corrections
+- SCARA arm mode changes are now only permitted in uncoordinated (G0) moves
+
+Version 1.20alpha4
+==================
+
+Upgrade notes from 1.19.2:
+- If installing this release on a Duet WiFi, install DuetWiFiServer version 1.20 alpha first, available at https://github.com/dc42/DuetWiFiSocketServer/blob/master/Release/DuetWiFiServer.bin.
+- Recommended Duet Web Control version is still 1.19
+
+New and changed features:
+- Added event logging, controlled by the M929 command
+- On the Duet WiFi the M552 command takes an optional SSID parameter, allowing you to connect to a specified SSID even if it is hidden
+- M572 command now allows multiple colon-separate D values
+- When M591 and G32 are used to produce manual bed levelling adjustments, the first screw defined in the M671 command is left alone. Previously the screw needing the smallest correction was left alone.
+- SCARA printers can now use the manual bed levelling assistant
+- The thermocouple type letter in the M305 command to configure a MAX31856-based thermocouple adapter may now be in lower case
+- Added protection against a dud command line containing letter M being interpreted as a M0 command
+- When doing a firmware upgrade, the message sent to the USB port now warns that the USB will be disconnected
+- A resurrect.g file is now created any time the print is paused. This allows for planned power down ands resume.
+
+Internal changes:
+- Upgraded compiler version
+- Changed to use the hardware floating point ABI on the SAM4
+- Simplified conditional directives that depend on the target hardware, by adding new #defines for supported features and a DUET_06_085 #define.
+
+Bug fixes:
+- When G29 was run on a SCARA printer, probe points could be incorrectly skipped and spurious "not reachable" messages generated
+- Pullup resistors are now enabled on endstop inputs 10 and 11 on the CONN_SD connector
+- Fixed duplicate error message when a gcode file is not found
+- Fixed reference to homing the towers of a SCARA printer in an error message
+
+Version 1.19.2
+==============
+
+Upgrade notes from version 1.19:
+- If your printer is a SCARA then you now need to set appropriate M208 lower and upper limits for X and Y
+- If you are upgrading a Duet WiFi from firmware 1.19, install DuetWiFiFirmware 1.19.2 first, and confirm that the new version is running before installing DuetWiFiServer 1.19.2
+- **Important!** See also the upgrade notes for version 1.19 if you are upgrading from 1.18.2 or earlier
+- Recommended DuetWebControl version is 1.19
+- Recommended DuetWiFiServer version is 1.19.2
+
+New and changed features:
+- M37 P parameter is supported. If you send M37 P"file.g" then printing file.g will be simulated and the expected print time reported.
+- The bed adjusting wizard now leaves one of the screws alone when suggesting corrections
+- The machine name and the password in the M550 and M551 commands may now be quoted, optionally
+- If M104 T# is used and tool # is currently in standby, then its standby temperature will be set as well as its active temperature
+- SCARA kinematic calculations have been speeded up
+- SCARA segments/second now defaults to 100
+- SCARA printers now apply the M208 axis limits to X and Y as well as to other axes. Minimum and maximum radius limits are still applied too.
+- SCARA M669 S and T parameters can be changed on the fly, i.e. re-homing is no longer required when they are changed
+- Minimum limits are applied to the parameters of M92, M201 and M203 commands to avoid firmware crashes if bad values are supplied
+- In conjunction with DuetWiFiServer 1.19.2, if connection to the access point is lost and the automatic reconnection attempt fails, the WiFi module will attempt a manual reconnect. Reconnection attempts are reported to PanelDue and to USB, and the reconnect count is included in the M122 report.
+- Jerk is no longer applied to the boundaries between travel moves and printing moves
+
+Bug fixes:
+- Incorrect, very large height errors were sometimes shown in the G29 height map when the number of probe points used approached the maximum supported
+- M669 was supposed to report the current kinematics, but didn't except for SCARA printers
+- SCARA kinematics didn't apply limits to the Z axis or to any additional axes. Delta printers didn't apply limits to any additional axes.
+- SCARA forward kinematics were wrong
+- SCARA minimum radius limit was wrong
+- If the number of commands in the deferred command queue exceeded 8, commands could be lost
+- If a G1 command was used with a coordinate for an axis that X or Y was mapped, that coordinate was ignored unless the S1 or S2 command modifier was used. This affected tool change files on IDEX machines.
+- If a reset was forced by the software watchdog because it got stuck in a spin loop, the reset reason in M122 was displayed as 'User'
+- The progress bar on PanelDue and the estimated end time based on filament usage were slightly ahead of the true values, especially for small gcode files
+- If a move had a tiny amount of XY movement and a much larger amount of extrusion, an extrusion speed in excess of the extruder speed limit set in M203 might be used. This could also be triggered if a move that was too short to need any steps was followed by a pure extrusion move.
+
+Version 1.19
+============
+
+Upgrade notes from version 1.18.2:
+- Recommended DuetWebControl version is 1.19
+- Recommended DuetWiFiServer version is 1.19
+- **Important!** If you use an IR Z probe or some other type that does not need to be deployed, delete the files sys/deployprobe and sys/retractprobe.g if they exist, because they are now called automatically. You can do this in the System Files Editor of the web interface.
+- **Important!** On a CoreXY machine, if upgrading from a version prior to 1.19beta9, you need to reverse the Y motor direction in the M569 command. Similarly for CoreXYU machines.
+- **Important!**  When upgrading a Duet WiFi from 1.18.2 or earlier firmware, see the important notes at https://duet3d.com/wiki/Upgrading_to_DuetWiFiFirmware_1.19.
+- Height map files created with firmware 1.18 or earlier cannot be read by firmware 1.19, so you will need to run G29 S0 again to generate a new heightmap.csv file
+- Height map filenames in G29, M374 and M375 commands must now be enclosed in double quotes
+- Every heater that you use must now be configured using a M305 command with a P parameter that identifies the heater. Previously, if a heater used default thermistor parameters, you could omit the M305 command for that heater.
+- If you are using a Duet Ethernet and you are letting your router allocate an IP address automatically, the IP address will change, because the default MAC address now depends on the board unique ID
+- If you have more than 32 probe points in your bed.g file, you will have to reduce the number to 32
+- If you send a G1 command with multiple E parameters (e.g. G1 X10 Y20 E1.0:1.5:2.0) then this is now only allowed when in relative extrusion mode (M83). If you try doing this in absolute extrusion mode, no extrusion will take place and an error message will be generated.
+- The behaviour of the R parameter in G1 commands has changed. Previously, G1 R1 with no additional parameters restored the head position for all axes to the values just prior to the last pause command, and G1 R2 with no additional parameters restored the head position for all axes to the values just prior to the last tool change. The behaviour now is that only axes that are mentioned in the G1 command have their values restored. So instead of using G1 R1 in resume.g to restore the head position, you must now use G1 R1 X0 Y0 Z0. As before, any non-zero axis parameters will be added to the saved position of that axis. This change has been made so that additional axes used as substitute X and Y axis are not automatically restored.
+
+Known issues:
+- Although the WiFi module can now be put into access point mode using M589 and M552 S1, WiFi access does not work properly in access point mode.
+- When a power fail occurs and power fail action has been configured, the firmware has to wait for some or all moves in the print queue to complete before the powerfail.g command can be run. This means that you may run out of power before powerfail.g is run, which could result in a few moves being skipped and the nozzle becoming stuck to the print.
+
+New features since 1.18.2:
+- Resume-after-power-failure support on Duet WiFi/Ethernet. See https://duet3d.com/wiki/Setting_up_to_resume_a_print_after_a_power_failure.
+- Bed levelling using multiple independent Z motors (M671). See https://duet3d.com/wiki/Bed_levelling_using_multiple_independent_Z_motors. In Cartesian/CoreXY printers without multiple independent Z motors, this facility can be used to determine what adjustments to make to bed leveling screws instead.
+- Support 2 additional external drivers connected to the CONN_LCD socket
+- FTP and Telnet are now supported on the Duet WiFi but are disabled by default. Use M586 to enable them.
+- Added support for M591 command to configure filament sensors (but filament sensor support still incomplete)
+- Added support for M672 command to program the Duet3D delta effector sensitivity
+- SCARA kinematics is believed to be fully working
+- Added support for binary file upload in M559 and M560
+- Added support for an additional SX1509B port expander
+- Pause commands issued while a macro is being executed are deferred until the macro has completed, and they can be resumed
+- M568 command to enable/disable mixing no longer does anything because mixing is always enabled. Mixing is not used if the E parameter in the G1 command has multiple values.
+- Message boxes can now have other axis jog buttons as well as Z (thanks chrishamm)
+- Probe deployment and retraction for G30 and G29 commands is now handled automatically. You should still include a M401 command before the first G30 command in bed.g and a M402 command after the last one, so that the probe deploys and retracts once for the entire sequence instead of once per G30 command.
+- M577 now allows separate X and Y spacings, use Sxxx:yyy
+- Volumetric extrusion is now supported (M200)
+- Additional tool/heater data is provided to DWC (thanks chrishamm). Using Heater 0 as a tool heater should now work.
+- The '(' character in a gcode file now introduces a comment, just as the ';' character does. The comment is terminated at end-of-line. This is not the same as in some CNC gcodes, where a comment introduced by '(' is terminated by ')'.
+- Heater tuning peak detection algorithm changed. This may fix some "no peak detected" reports during auto tuning.
+- The heater dead time is how taken as 60% of the peak delay time intead of 100%, which results in more aggressive PID parameters.
+- TEMPERATURE_CLOSE_ENOUGH reduced from 2.5C to 1.0C
+- Reduced the maximum number of random probe points on Duet WiFi/Ethernet to 32 to avoid running out of memory during delta auto calibration
+- DriveMovement structures are now allocated dynamically from a freelist, to allow more moves to be queued in typical cases. The number free and minimum ever free is included in the M122 report.
+- If the G10 command is used to set the standby temperature of a tool that is on standby, the live temperature is adjusted accordingly
+- SCARA parameters configured using M669 now include X and Y bed origin offsets
+- Baby stepping is no longer cleared when you home the printer or probe the bed
+- The Y axis can now be mapped in a similar way to the X axis
+- The meaning of the first M669 crosstalk parameter for a SCARA printer has changed. A zero value now means that the proximal motor does not affect the proximal-to-distal arm angle.
+- The CoreXY kinematics calculations have been changed to conform to the way they are defined in other firmwares and at CoreXY.com. See the important upgrade notes. The CoreXZ and CoreXYU kinematics have been changed similarly.
+- The maximum allowed target temperature for auto tuning now depends on the configured maximum temperature for that heater
+- The heater gain that provokes a warning when setting heater model parameters with M307 or after auto tuning now depends on the configured maximum temperature for that heater
+- If a PT100 interface reports an error when executing a M105 command with X parameter, the firmware now reports the nature of the error if possible
+- When M305 is used with an X parameter to select a PT100 sensor, a new optional F parameter configures rejection of 50Hz (F50) or 60Hz (F60) interference
+- Added support for prototype thermocouple adapter for type J etc. thermocouples (temperature sensor channels 150 to 157)
+- M408 S0 response now includes message box details for PanelDue (needs new PanelDue firmware)
+- M105 temperature reports are now in tool heater order instead of heater order
+- M105 temperature reports now report the setpoint temperatures as well as the current temperatures, to keep Repetier Host happy
+- Adjustment of head position to account for a changed tool offset is now deferred until the next move that includes axis movement, instead of the next move of any sort
+- When grid probing, if a point cannot be reached by the Z probe, a message is emitted
+- Command and parameter letters in gcode commands are now case-insensitive as per the NIST specification
+- On the Duet WiFi and Duet Ethernet up to 9 axes are now supported, named XYZUVWABC
+- In height map files the mean height error and deviation from the mean are now saved to 3 decimal places instead of 2
+- Z probing moves now use 250mm/sec^2 acceleration unless a lower Z acceleration limit has been configured. This is to avoid triggering nozzle-contact sensors at the start of a probing move.
+- M291 command is provided to display a message box with options for timeout, acknowledgement and axis jog buttons. This will require additional changes to DWC and PanelDue before it is fully usable.
+- M292 command is provided to acknowledge M291 messages
+- Manual delta calibration and bed compensation is supported (use P0 in the M558 command to indicate that there is no Z probe)
+- Minimum value for S parameter (maximum heater PWM) in M307 command is reduced from 20% to 1%
+- Core XYU kinematics are now supported (thanks Lars)
+- RADDS build now supports 9 motors (thanks Tom)
+- If a homing move uses parameter S3 instead of S1 then the axis minimum or maximum value is set to the current position instead of vice versa
+- M589 with no parameters now reports the Duet's own SSID
+- M589 S"*" now deletes the Duet WiFi's own access point details
+- G1 command now take an optional P parameter which is a bitmap of output ports to turn on and off for the duration of the move. The mapping of bits to ports and the port switching advance time is configured using M670.
+- M42 command now supports F parameter to select the PWM frequency
+- Up to 10 virtual heaters can be defined using M305 commands, numbered 100-109. Virtual heater 100 defaults to sensing the MCU temperature (sensor channel 1000), and on the Duet WiFi/Ethernet virtual heaters 101-102 default to sensing the TMC2660 temperature warning/overheat sensors on the Duet and the DueX expansion board respectively (sensor channels 1001-1002).
+- Heaters can be named by adding parameter H"name" in the M305 command. The quote-marks are compulsory. The temperatures of named virtual heaters are made available to DWC for display.
+- Fans can be thermostatically controlled based on the temperatures of any real or virtual heaters.
+- Fans can be thermostatically controlled in proportional mode by specifying a temperature range e.g. T40:50. If you specify only one temperature, or the second temperature is not greater than the first, bang-band mode will be used as before. In proportional mode the S parameter is not used but the L value is honoured.
+- Current loop temperature sensors are now supported (sensor channels 300-307). M305 parameters L and H set the temperatures corresponding to 4mA and 20mA current respectively.
+- M305 with just a P parameter now reports the sensor type along with the other parameters.
+- It is now possible to create additional axes that are not visible in the user interface. To do this, add parameter P# to your M584 command where # is the number of axes you want to be visible (e.g. 3 = just X,Y,Z).
+- Thermostatic fans now have a 1C hysteresis to reduce the effects of noise
+- M204 S parameter is supported for backwards compatibility e.g. with Cura
+- Some other exceptions now record a stack trace, as Hard Fault exceptions already did
+- M122 now displays additional information: firmware name and version, hardware type, last software reset reason, unique board ID if available, and filament sensor status
+- On the Duet Ethernet, the default MAC address is generated from the board ID
+- The pause.g, resume.g and cancel.g files are not run unless all axes have been homed.
+- The default maximum hot end temperature has been increased to 288C
+- String parameters in some gcode commands, such as filenames, can now be enclosed in double quotation marks to avoid ambiguity
+- When tuning a bed or chamber heater, more time is allowed for the temperature to start rising
+- On the Duet WiFi the network code has been rewritten. The web server now runs on the Duet instead of on the WiFi module. FTP and Telnet are supported if enabled using M586. New commands M587, M588 and M589 are supported. The meaning of the M552 S parameter has changed: S-1 holds the WiFi module in the reset state, S0 holds it in the Idle state allowing it to process M587/M588/M589 commands, S1 starts it in client mode and S2 starts it in access point mode. The M122 diagnostic report includes WiFi module parameters unless the WiFi module is being held in the reset state.
+- Added support for simple switch-based filament sensors and the Duet3D filament sensor.
+
+Bug fixes:
+- XYZ coordinates could be reported as NaN in DWC status responses, causing AJAX errors
+- Axis compensation now takes account of X and Y axis mapping
+- Messages rejected by webserver now generate a generic message only if debug is enabled
+- Heater 0 output can now be used for general output after its model is disabled
+- Fixed issue with homing axes using endstop connectors on DueXn expansion board
+- M669 with no parameters now reports the bed offset on a SCARA machine as well as the other parameters
+- Heater model max PWM is now set to tuning PWM after auto tuning (thanks cangelis)
+- If an HTML file uploaded over USB contained an embedded leading substring of the EOF string, incorrect data was written to file (thanks cangelis)
+- G2 and G3 arc movement commands didn't work when the X axis was mapped
+- On a SCARA machine, sending G92 X0 Y0 caused the Duet to return position data containing NaNs to Duet Web Control, which caused it to disconnect
+- When an extruding move had a lot more acceleration than deceleration, too many extruder steps were scheduled. A check threw the additional steps away so that printing was not affected, but a step error was logged.
+- Except when delta kinematics were being used, speeds and accelerations were limited independently for the X and Y axes. This is correct for Cartesian printers, but not for CoreXY, Scara etc. The speed and acceleration of XY movement is now always limited to the lower of the specified maximum X and Y speed and acceleration unless Cartesian kinematics are being used.
+- When a print was paused and resumed, it didn't always resume at the correct move
+- When G92 or M374 was used to save a height map using the default filename, sometimes it would save to a random filename instead
+- When G92 S1 or M375 was used to load a height map using the default filename, sometimes it would fail to load
+- When the current tool offsets change because of a tool change or a G10 command, the new offsets are applied to the endpoint of the next move even if it has no movement along axes with changed offets
+- The tool change restore point coordinates now take account of X axis mapping
+- On a delta printer the nozzle height is now limited to reachable values, to avoid the motors trying to move the carriages past the physical endstops
+- M552 with no parameters now reports the current IP address as well as the status
+- Some Duets would restart immediately after initial power up and then run normally
+- Thermostatic fans can now depend on heater numbers 100 (CPU temperature), 101 (TMC2660 drivers on Duet WiFi/Ethernet) and 102 (TMC2660 drivers on DueXn expansion board)
+- MCU temperature measurement now includes an averaging filter to reduce noise
+- On the Duet WiFi, when you download a file it no longer opens it in the browser but gives you a "Save file as" prompt instead.
+- FTP is now working on the Duet Ethernet
+- Filament consumed during tool change macros is no longer added to the total filament consumed for the purpose of estimated the percentage completion of the print
+
+Version 1.18.2
+==============
+
+New features:
+- On the Duet WiFi and Duet Ethernet, recognise the latest production DueX2 and DueX5 boards
+- Support fan 8 on the latest DueX5 boards
+
+Bug fixes:
+- M42 gcode commands were not synchronised with movement
+- M21 did not full reset the SD card state, which could lead to errors if the SD card was modified outside the Duet and then remounted using M21
+- The M106 command accepted a fan number (P parameter) one higher than it should
+
+Version 1.18.1
+==============
+
+Bug fixes:
+- Corrected USB VID/PID
+
+Version 1.18
+============
 
 New features:
 - First official release for Duet Ethernet
@@ -22,6 +342,10 @@ New features:
 - Live coordinates are now reported to 3 decimal places instead of 2
 - When using a Z probe type other than 2, the probe output is sampled every 1ms instead of every 2ms for faster response
 - PanelDue status responses continue to be sent while executing M109/116/190/191 commands
+- Increased maximum permitted motor current on TMC2660 drivers to 2.4A
+- Improved error messages when a M303 command has an out-of-range parameter
+- We now use a USB VID/PID allocated to us instead oif Atmel's CDC example ones
+- The Windows device driver now supports the Bossa Program Port, so you can now use bossac even if you don't have the Atmel or Arduino device driver for it installed
 
 Bug fixes:
 - Fixed issue with loading height map file when the number of probe points along the X axis is large
@@ -40,6 +364,7 @@ Known issues
 - FTP on the Duet Ethernet cannot be used to do file transfers
 
 Upgrade notes
+- If you connect via USB from a Windows PC you should install the updated device driver in the Drivers folder of this repository
 - If you use the M552 R parameter to change the HTTP port number on a wired Duet, you will need to use M586 instead
 - If you use FTP or Telnet on a wired Duet, you will need to enable them using M586
 - It is recommended that you re-run heater auto tuning when upgrading to 1.18 from an earlier release

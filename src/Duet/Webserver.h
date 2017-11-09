@@ -49,7 +49,7 @@ const size_t minHttpResponseSize = 768;			// minimum number of bytes required fo
 
 const size_t maxCommandWords = 4;				// max number of space-separated words in the command
 const size_t maxQualKeys = 5;					// max number of key/value pairs in the qualifier
-const size_t maxHeaders = 16;					// max number of key/value pairs in the headers
+const size_t maxHeaders = 30;					// max number of key/value pairs in the headers
 
 const size_t  maxHttpSessions = 8;				// maximum number of simultaneous HTTP sessions
 const uint32_t httpSessionTimeout = 8000;		// HTTP session timeout in milliseconds
@@ -96,9 +96,9 @@ class ProtocolInterpreter
 
 	protected:
 
-		Platform *platform;
-		Webserver *webserver;
-		Network *network;
+		Platform * const platform;
+		Webserver * const webserver;
+		Network * const network;
 
 		// Information for file uploading
 		enum UploadState
@@ -337,7 +337,7 @@ protected:
 	NetworkTransaction *currentTransaction;
 	volatile Connection readingConnection;
 
-    float longWait;
+    uint32_t longWait;
 };
 
 inline bool ProtocolInterpreter::CanParseData() { return true; }

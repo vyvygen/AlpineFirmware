@@ -7,25 +7,27 @@
 
 #include "Socket.h"
 
-#include "NetworkTransaction.h"
 #include "NetworkBuffer.h"
 #include "Network.h"
 #include "RepRap.h"
-#include "Webserver.h"
 #include "socketlib.h"
 
 //***************************************************************************************************
 // Socket class
 
-Socket::Socket() : currentTransaction(nullptr), receivedData(nullptr), state(SocketState::disabled)
+const uint32_t FindResponderTimeout = 2000;			// how long we wait for a responder to become available
+const unsigned int MaxBuffersPerSocket = 4;
+
+Socket::Socket() : receivedData(nullptr), state(SocketState::disabled)
 {
 }
 
 // Initialise a TCP socket
-void Socket::Init(SocketNumber skt, Port serverPort)
+void Socket::Init(SocketNumber skt, Port serverPort, Protocol p)
 {
 	socketNum = skt;
 	localPort = serverPort;
+	protocol = p;
 	ReInit();
 }
 
@@ -42,7 +44,6 @@ void Socket::ReInit()
 	{
 		receivedData = receivedData->Release();
 	}
-	ReleaseTransaction();
 
 	persistConnection = true;
 	isTerminated = false;
@@ -56,16 +57,15 @@ void Socket::ReInit()
 // Close a connection when the last packet has been sent
 void Socket::Close()
 {
-	disconnectNoWait(socketNum);
-}
-
-// Release the current transaction
-void Socket::ReleaseTransaction()
-{
-	if (currentTransaction != nullptr)
+	if (state != SocketState::disabled && state != SocketState::inactive)
 	{
-		currentTransaction->Release();
-		currentTransaction = nullptr;
+		ExecCommand(socketNum, Sn_CR_DISCON);
+		state = SocketState::closing;
+		DiscardReceivedData();
+		if (protocol == FtpDataProtocol)
+		{
+			localPort = 0;					// don't re-listen automatically
+		}
 	}
 }
 
@@ -77,91 +77,63 @@ void Socket::Terminate()
 		disconnectNoWait(socketNum);
 		isTerminated = true;
 		state = SocketState::inactive;
-		while (receivedData != nullptr)
-		{
-			receivedData = receivedData->Release();
-		}
-		ReleaseTransaction();
+		DiscardReceivedData();
 	}
-}
-
-// Test whether we have a connection on this socket
-bool Socket::IsConnected() const
-{
-	if (state == SocketState::disabled)
-	{
-		return false;
-	}
-	const uint8_t stat = getSn_SR(socketNum);
-	return stat == SOCK_ESTABLISHED || stat == SOCK_CLOSE_WAIT;
 }
 
 // Return true if there is or may soon be more data to read
-bool Socket::HasMoreDataToRead() const
+bool Socket::CanRead() const
 {
-	if (state == SocketState::disabled)
-	{
-		return false;
-	}
-	return (receivedData != nullptr && receivedData->TotalRemaining() != 0)		// already have more data
-		|| getSn_SR(socketNum) == SOCK_ESTABLISHED;								// still fully connected, so we may receive more
+	return (state == SocketState::connected)
+		|| (state == SocketState::clientDisconnecting && receivedData != nullptr && receivedData->TotalRemaining() != 0);
 }
 
-bool Socket::CanWrite() const
+bool Socket::CanSend() const
 {
-	if (state == SocketState::disabled)
-	{
-		return false;
-	}
-	const uint8_t stat = getSn_SR(socketNum);
-	return stat == SOCK_ESTABLISHED || stat == SOCK_CLOSE_WAIT;
-}
-
-// Return true if we are in the sending phase
-bool Socket::IsSending() const
-{
-	return currentTransaction != nullptr && currentTransaction->IsSending();
+	return state == SocketState::connected;
 }
 
 // Read 1 character from the receive buffers, returning true if successful
 bool Socket::ReadChar(char& c)
 {
-	while (receivedData != nullptr && receivedData->IsEmpty())
+	if (receivedData != nullptr)
 	{
-		receivedData = receivedData->Release();		// discard empty buffer at head of chain
+		const bool ret = receivedData->ReadChar(c);
+		if (receivedData->IsEmpty())
+		{
+			receivedData = receivedData->Release();
+		}
+		return ret;
 	}
 
-	if (receivedData == nullptr)
-	{
-		c = 0;
-		return false;
-	}
-
-	bool ret = receivedData->ReadChar(c);
-	if (receivedData->IsEmpty())
-	{
-		receivedData = receivedData->Release();
-	}
-	return ret;
+	c = 0;
+	return false;
 }
 
-// Return a pointer to data in a buffer and a length available, and mark the data as taken
-bool Socket::ReadBuffer(const char *&buffer, size_t &len)
+// Return a pointer to data in a buffer and a length available
+bool Socket::ReadBuffer(const uint8_t *&buffer, size_t &len)
 {
-	while (receivedData != nullptr && receivedData->IsEmpty())
+	if (receivedData != nullptr)
 	{
-		receivedData = receivedData->Release();		// discard empty buffer at head of chain
+		len = receivedData->Remaining();
+		buffer = receivedData->UnreadData();
+		return true;
 	}
 
-	if (receivedData == nullptr)
-	{
-		return false;
-	}
+	return false;
+}
 
-	len = NetworkBuffer::bufferSize;				// initial value passed to TakeData is the maximum amount we will take
-	buffer = reinterpret_cast<const char*>(receivedData->TakeData(len));
-//	debugPrintf("Taking %d bytes\n", len);
-	return true;
+// Flag some data as taken from the receive buffers. We never take data from more than one buffer at a time.
+void Socket::Taken(size_t len)
+{
+	if (receivedData != nullptr)
+	{
+		receivedData->Taken(len);
+		if (receivedData->IsEmpty())
+		{
+			receivedData = receivedData->Release();		// discard empty buffer at head of chain
+		}
+	}
 }
 
 // Poll a socket to see if it needs to be serviced
@@ -169,19 +141,6 @@ void Socket::Poll(bool full)
 {
 	if (state != SocketState::disabled)
 	{
-		// The mechanism used by class OutputBuffer and now by NetworkBuffer of marking data taken as soon as we return a pointer to it
-		// is DANGEROUS and will have to be rewritten for RTOS. We need to recycle empty buffers, otherwise multiple file uploads get stalled.
-		// However, we MUST NOT do this until the data had DEFINITELY been finished with. Temporarily use this conditional to avoid a bug
-		// with data corruption when this is not the case.
-		if (full)
-		{
-			// Recycle any receive buffers that are now empty
-			while (receivedData != nullptr && receivedData->IsEmpty())
-			{
-				receivedData = receivedData->Release();		// discard empty buffer at head of chain
-			}
-		}
-
 		switch(getSn_SR(socketNum))
 		{
 		case SOCK_INIT:
@@ -203,110 +162,42 @@ void Socket::Poll(bool full)
 				getSn_DIPR(socketNum, reinterpret_cast<uint8_t*>(&remoteIPAddress));
 				remotePort = getSn_DPORT(socketNum);
 				setSn_IR(socketNum, Sn_IR_CON);
+				whenConnected = millis();
 			}
 
-			if (state == SocketState::listening)		// if it is a new connection
+			if (full && state == SocketState::listening)		// if it is a new connection
 			{
-				if (socketNum == FtpSocketNumber || socketNum == FtpDataSocketNumber || socketNum == TelnetSocketNumber)
+				if (reprap.GetNetwork().FindResponder(this, protocol))
 				{
-					// FTP and Telnet protocols need a connection reply, so tell the Webserver module about the new connection
-					if (currentTransaction == nullptr)
+					state = SocketState::connected;
+					sendOutstanding = false;
+				}
+				else
+				{
+					if (millis() - whenConnected >= FindResponderTimeout)
 					{
-						currentTransaction = NetworkTransaction::Allocate();
-						if (currentTransaction != nullptr)
-						{
-							currentTransaction->Set(this, TransactionStatus::connected);
-						}
-					}
-					else
-					{
-						// This should not happen
-//						debugPrintf("ERROR:currentTransation should be null but isn't\n");
+						Terminate();
 					}
 				}
-				state = SocketState::connected;
 			}
 
+			if (state == SocketState::connected)
 			{
 				// See if the socket has received any data
-				const uint16_t len = getSn_RX_RSR(socketNum);
-				if (len != 0)
-				{
-//					debugPrintf("%u available\n", len);
-					// There is data available, so allocate a buffer
-					//TODO: if there is already a buffer and it is in an appropriate state (i.e. receiving) and it has enough room, we could just append the data
-					NetworkBuffer * const buf = NetworkBuffer::Allocate();
-					if (buf != nullptr)
-					{
-						wiz_recv_data(socketNum, buf->Data(), len);
-						ExecCommand(socketNum, Sn_CR_RECV);
-						buf->dataLength = (size_t)len;
-						buf->readPointer = 0;
-						NetworkBuffer::AppendToList(&receivedData, buf);
-					}
-//					else debugPrintf("no buffer\n");
-				}
-			}
-
-			if (currentTransaction == nullptr && receivedData != nullptr)
-			{
-				currentTransaction = NetworkTransaction::Allocate();
-				if (currentTransaction != nullptr)
-				{
-					currentTransaction->Set(this, TransactionStatus::receiving);
-				}
-			}
-
-			// See if we can send any data.
-			// Currently we don't send if we are being called from hsmci because we don't want to risk releasing a buffer that we may be reading data into.
-			// We could use a buffer locking mechanism instead. However, the speed of sending is not critical, so we don't do that yet.
-			if (full && IsSending() && TrySendData())
-			{
-				const bool closeAfterSending = currentTransaction->CloseAfterSending();
-				ReleaseTransaction();
-				if (closeAfterSending)
-				{
-					ExecCommand(socketNum, Sn_CR_DISCON);
-					state = SocketState::closing;
-					DiscardReceivedData();
-				}
+				ReceiveData();
 			}
 			break;
 
 		case SOCK_CLOSE_WAIT:			// A client has asked to disconnect
-			state = SocketState::clientDisconnecting;
-			if (IsSending() && TrySendData())
-			{
-				ReleaseTransaction();				// finished sending
-			}
+			// Check for further incoming packets before this socket is finally closed.
+			// This must be done to ensure that FTP uploads are not cut off.
+			ReceiveData();
 
-			// Although there is a transaction status for a client disconnecting, the webserver module does nothing with those transactions.
-			// So we don't bother to generate them here.
-			if (!IsSending() && currentTransaction == nullptr)
-			{
-				if (HasMoreDataToRead())
-				{
-					// We have more received data, so make it available to the webserver to process
-					currentTransaction = NetworkTransaction::Allocate();
-					if (currentTransaction != nullptr)
-					{
-						currentTransaction->Set(this, TransactionStatus::receiving);
-					}
-				}
-				else
-				{
-					ExecCommand(socketNum, Sn_CR_DISCON);
-					state = SocketState::closing;
-				}
-			}
+			state = SocketState::clientDisconnecting;
 			break;
 
 		case SOCK_CLOSED:
-			if (full)									// don't make a call to webserver if we might be in it already
-			{
-				reprap.GetWebserver()->ConnectionLost(this);	// the webserver needs this to be called for both graceful and disgraceful disconnects
-				ReInit();
-			}
+			ReInit();
 			break;
 
 		default:
@@ -315,68 +206,41 @@ void Socket::Poll(bool full)
 	}
 }
 
-// Try to send data, returning true if all data has been sent and we ought to close the socket
-// We have already checked that the socket is in the ESTABLISHED or CLOSE_WAIT state.
-bool Socket::TrySendData()
+// Try to receive more incoming data from the socket
+void Socket::ReceiveData()
 {
-	if (isSending)									// are we already sending?
+	const uint16_t len = getSn_RX_RSR(socketNum);
+	if (len != 0)
 	{
-		const uint8_t tmp = getSn_IR(socketNum);
-		if (tmp & Sn_IR_SENDOK)						// did the previous send complete?
+//		debugPrintf("%u available\n", len);
+		NetworkBuffer * const lastBuffer = NetworkBuffer::FindLast(receivedData);
+		if (lastBuffer != nullptr && (lastBuffer->SpaceLeft() >= len || (lastBuffer->SpaceLeft() != 0 && NetworkBuffer::Count(receivedData) >= MaxBuffersPerSocket)))
 		{
-			setSn_IR(socketNum, Sn_IR_SENDOK);		// if yes
-			isSending = false;
+			const size_t lengthToRead = min<size_t>((size_t)len, lastBuffer->SpaceLeft());
+			wiz_recv_data(socketNum, lastBuffer->UnwrittenData(), (uint16_t)lengthToRead);
+			lastBuffer->dataLength += lengthToRead;
+			if (reprap.Debug(moduleNetwork))
+			{
+				debugPrintf("Received %u bytes\n", (unsigned int)lengthToRead);
+			}
 		}
-		else if (tmp & Sn_IR_TIMEOUT)				// did it time out?
+		else if (NetworkBuffer::Count(receivedData) < MaxBuffersPerSocket)
 		{
-			isSending = false;
-			disconnectNoWait(socketNum);			// if so, close the socket
-			return true;							// and release buffers etc.
+			NetworkBuffer * const buf = NetworkBuffer::Allocate();
+			if (buf != nullptr)
+			{
+				wiz_recv_data(socketNum, buf->Data(), len);
+				ExecCommand(socketNum, Sn_CR_RECV);
+				buf->dataLength = (size_t)len;
+				NetworkBuffer::AppendToList(&receivedData, buf);
+				if (reprap.Debug(moduleNetwork))
+				{
+					debugPrintf("Received %u bytes\n", (unsigned int)len);
+				}
+			}
 		}
-		else
-		{
-			//debugPrintf("Waiting for data to be sent\n");
-			return false;							// last send is still in progress
-		}
+//		else debugPrintf("no buffer\n");
 	}
-
-	// Socket is free to send
-	if (currentTransaction->GetStatus() == TransactionStatus::finished)
-	{
-		return true;
-	}
-
-	size_t freesize = (size_t)getSn_TX_FSR(socketNum);
-	uint16_t ptr = getSn_TX_WR(socketNum);
-	bool sent = false;
-	while (freesize != 0)
-	{
-		size_t length = freesize;
-		const uint8_t *data = currentTransaction->GetDataToSend(length);
-		if (data == nullptr)
-		{
-			break;									// no more data or can't allocate a file buffer
-		}
-		//debugPrintf("rp=%04x tp=%04x\n", getSn_TX_RD(socketNum), getSn_TX_WR(socketNum));
-		wiz_send_data_at(socketNum, data, length, ptr);
-		//debugPrintf("Wrote %u bytes of %u free, %02x %02x %02x\n", length, freesize, data[0], data[1], data[2]);
-		freesize -= length;
-		ptr += (uint16_t)length;
-		sent = true;
-	}
-
-	if (sent)
-	{
-		//debugPrintf("Sending data, rp=%04x tp=%04x\n", getSn_TX_RD(socketNum), getSn_TX_WR(socketNum));
-		ExecCommand(socketNum, Sn_CR_SEND);
-		isSending = true;
-	}
-	else if (currentTransaction->GetStatus() == TransactionStatus::finished)
-	{
-		return true;								// there was no more data to send
-	}
-
-	return false;
 }
 
 // Discard any received data for this transaction
@@ -388,34 +252,70 @@ void Socket::DiscardReceivedData()
 	}
 }
 
-void Socket::ResetDataPointer()
+// Send the data, returning the length buffered
+size_t Socket::Send(const uint8_t *data, size_t length)
 {
-	if (receivedData != nullptr)
+	if (CanSend() && length != 0 && getSn_SR(socketNum) == SOCK_ESTABLISHED)
 	{
-		receivedData->ResetPointer();
+		// Check for previous send complete
+		if (isSending)									// are we already sending?
+		{
+			const uint8_t tmp = getSn_IR(socketNum);
+			if (tmp & Sn_IR_SENDOK)						// did the previous send complete?
+			{
+				setSn_IR(socketNum, Sn_IR_SENDOK);		// if yes
+				isSending = false;
+			}
+			else if (tmp & Sn_IR_TIMEOUT)				// did it time out?
+			{
+				isSending = false;
+				disconnectNoWait(socketNum);			// if so, close the socket
+				state = SocketState::aborted;
+				return 0;								// and release buffers etc.
+			}
+			else
+			{
+				return 0;								// last send is still in progress
+			}
+		}
+
+		if (!sendOutstanding)
+		{
+			wizTxBufferLeft = getSn_TX_FSR(socketNum);	// get free buffer space
+			if (wizTxBufferLeft == 0)
+			{
+				return 0;
+			}
+			wizTxBufferPtr = getSn_TX_WR(socketNum);
+		}
+
+		if (length > wizTxBufferLeft)
+		{
+			length = wizTxBufferLeft;
+		}
+		wiz_send_data_at(socketNum, data, length, wizTxBufferPtr);
+		wizTxBufferLeft -= length;
+		wizTxBufferPtr += length;
+		sendOutstanding = true;
+		if (wizTxBufferLeft == 0)
+		{
+			Send();
+		}
+		return length;
 	}
+	return 0;
 }
 
-// The webserver calls this to tell the socket that it needs a transaction, e.g. for sending a Telnet or FTP response.
-// An empty transaction will do.
-// Return true if we can do it, false if the connection is closed or closing.
-bool Socket::AcquireTransaction()
+// Tell the interface to send the outstanding data
+void Socket::Send()
 {
-	if (currentTransaction != nullptr)
+	if (CanSend() && sendOutstanding)
 	{
-		return currentTransaction->GetStatus() == TransactionStatus::acquired;
+		setSn_TX_WR(socketNum, wizTxBufferPtr);
+		ExecCommand(socketNum, Sn_CR_SEND);
+		isSending = true;
+		sendOutstanding = false;
 	}
-
-	if (getSn_SR(socketNum) == SOCK_ESTABLISHED)
-	{
-		currentTransaction = NetworkTransaction::Allocate();
-		if (currentTransaction != nullptr)
-		{
-			currentTransaction->Set(this, TransactionStatus::acquired);
-			return true;
-		}
-	}
-	return false;
 }
 
 // End

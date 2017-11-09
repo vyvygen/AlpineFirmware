@@ -10,11 +10,54 @@
 #include "Move.h"
 #include "RepRap.h"
 #include "Libraries/Math/Isqrt.h"
+#include "Kinematics/LinearDeltaKinematics.h"
+
+// Static members
+
+DriveMovement *DriveMovement::freeList = nullptr;
+int DriveMovement::numFree = 0;
+int DriveMovement::minFree = 0;
+
+void DriveMovement::InitialAllocate(unsigned int num)
+{
+	while (num != 0)
+	{
+		freeList = new DriveMovement(freeList);
+		++numFree;
+		--num;
+	}
+	ResetMinFree();
+}
+
+DriveMovement *DriveMovement::Allocate(size_t drive, DMState st)
+{
+	DriveMovement *dm = freeList;
+	if (dm != nullptr)
+	{
+		freeList = dm->nextDM;
+		--numFree;
+		if (numFree < minFree)
+		{
+			minFree = numFree;
+		}
+		dm->nextDM = nullptr;
+		dm->drive = (uint8_t)drive;
+		dm->state = st;
+	}
+	return dm;
+}
+
+// Constructors
+DriveMovement::DriveMovement(DriveMovement *next) : nextDM(next)
+{
+}
+
+// Non static members
 
 // Prepare this DM for a Cartesian axis move
 void DriveMovement::PrepareCartesianAxis(const DDA& dda, const PrepParams& params)
 {
-	const float stepsPerMm = reprap.GetPlatform()->DriveStepsPerUnit(drive) * fabsf(reprap.GetMove()->MotorFactor(drive, dda.directionVector));
+	const float stepsPerMm = (float)totalSteps/dda.totalDistance;
 	mp.cart.twoCsquaredTimesMmPerStepDivA = (uint64_t)(((float)DDA::stepClockRate * (float)DDA::stepClockRate)/(stepsPerMm * dda.acceleration)) * 2;
 
 	// Acceleration phase parameters
@@ -49,7 +92,65 @@ void DriveMovement::PrepareCartesianAxis(const DDA& dda, const PrepParams& param
 // Prepare this DM for a Delta axis move
 void DriveMovement::PrepareDeltaAxis(const DDA& dda, const PrepParams& params)
 {
-	const float stepsPerMm = reprap.GetPlatform()->DriveStepsPerUnit(drive);
+	const float stepsPerMm = reprap.GetPlatform().DriveStepsPerUnit(drive);
+	const float A = params.initialX - params.dparams->GetTowerX(drive);
+	const float B = params.initialY - params.dparams->GetTowerY(drive);
+	const float aAplusbB = A * dda.directionVector[X_AXIS] + B * dda.directionVector[Y_AXIS];
+	const float dSquaredMinusAsquaredMinusBsquared = params.diagonalSquared - fsquare(A) - fsquare(B);
+	const float h0MinusZ0 = sqrtf(dSquaredMinusAsquaredMinusBsquared);
+	mp.delta.hmz0sK = (int32_t)(h0MinusZ0 * stepsPerMm * DriveMovement::K2);
+	mp.delta.minusAaPlusBbTimesKs = -(int32_t)(aAplusbB * stepsPerMm * DriveMovement::K2);
+	mp.delta.dSquaredMinusAsquaredMinusBsquaredTimesKsquaredSsquared =
+			(int64_t)(dSquaredMinusAsquaredMinusBsquared * fsquare(stepsPerMm * DriveMovement::K2));
+
+	// Calculate the distance at which we need to reverse direction.
+	if (params.a2plusb2 <= 0.0)
+	{
+		// Pure Z movement. We can't use the main calculation because it divides by a2plusb2.
+		direction = (dda.directionVector[Z_AXIS] >= 0.0);
+		reverseStartStep = totalSteps + 1;
+	}
+	else
+	{
+		// The distance to reversal is the solution to a quadratic equation. One root corresponds to the carriages being below the bed,
+		// the other root corresponds to the carriages being above the bed.
+		const float drev = ((dda.directionVector[Z_AXIS] * sqrtf(params.a2b2D2 - fsquare(A * dda.directionVector[Y_AXIS] - B * dda.directionVector[X_AXIS])))
+							- aAplusbB)/params.a2plusb2;
+		if (drev > 0.0 && drev < dda.totalDistance)		// if the reversal point is within range
+		{
+			// Calculate how many steps we need to move up before reversing
+			const float hrev = dda.directionVector[Z_AXIS] * drev + sqrtf(dSquaredMinusAsquaredMinusBsquared - 2 * drev * aAplusbB - params.a2plusb2 * fsquare(drev));
+			const int32_t numStepsUp = (int32_t)((hrev - h0MinusZ0) * stepsPerMm);
+
+			// We may be almost at the peak height already, in which case we don't really have a reversal.
+			if (numStepsUp < 1 || (direction && (uint32_t)numStepsUp <= totalSteps))
+			{
+				reverseStartStep = totalSteps + 1;
+			}
+			else
+			{
+				reverseStartStep = (uint32_t)numStepsUp + 1;
+
+				// Correct the initial direction and the total number of steps
+				if (direction)
+				{
+					// Net movement is up, so we will go up a bit and then down by a lesser amount
+					totalSteps = (2 * numStepsUp) - totalSteps;
+				}
+				else
+				{
+					// Net movement is down, so we will go up first and then down by a greater amount
+					direction = true;
+					totalSteps = (2 * numStepsUp) + totalSteps;
+				}
+			}
+		}
+		else
+		{
+			reverseStartStep = totalSteps + 1;
+		}
+	}
+
 	mp.delta.twoCsquaredTimesMmPerStepDivAK = (uint32_t)((float)DDA::stepClockRateSquared/(stepsPerMm * dda.acceleration * (K2/2)));
 
 	// Acceleration phase parameters
@@ -81,11 +182,11 @@ void DriveMovement::PrepareDeltaAxis(const DDA& dda, const PrepParams& params)
 void DriveMovement::PrepareExtruder(const DDA& dda, const PrepParams& params, bool doCompensation)
 {
 	const float dv = dda.directionVector[drive];
-	const float stepsPerMm = reprap.GetPlatform()->DriveStepsPerUnit(drive) * fabsf(dv);
+	const float stepsPerMm = reprap.GetPlatform().DriveStepsPerUnit(drive) * fabsf(dv);
 	mp.cart.twoCsquaredTimesMmPerStepDivA = (uint64_t)(((float)DDA::stepClockRate * (float)DDA::stepClockRate)/(stepsPerMm * dda.acceleration)) * 2;
 
 	// Calculate the pressure advance parameter
-	const float compensationTime = (doCompensation && dv > 0.0) ? reprap.GetPlatform()->GetPressureAdvance(drive - reprap.GetGCodes()->GetNumAxes()) : 0.0;
+	const float compensationTime = (doCompensation && dv > 0.0) ? reprap.GetPlatform().GetPressureAdvance(drive - reprap.GetGCodes().GetTotalAxes()) : 0.0;
 	const uint32_t compensationClocks = (uint32_t)(compensationTime * DDA::stepClockRate);
 
 	// Calculate the net total step count to allow for compensation. It may be negative.
@@ -108,7 +209,7 @@ void DriveMovement::PrepareExtruder(const DDA& dda, const PrepParams& params, bo
 	// First check whether there is any deceleration at all, otherwise we may get strange results because of rounding errors
 	if (dda.decelDistance * stepsPerMm < 0.5)		// if less than 1 deceleration step
 	{
-		totalSteps = (uint)max<int32_t>(netSteps, 0);
+		totalSteps = (uint32_t)max<int32_t>(netSteps, 0);
 		mp.cart.decelStartStep = reverseStartStep = netSteps + 1;
 		topSpeedTimesCdivAPlusDecelStartClocks = 0;
 		mp.cart.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA = 0;
@@ -123,16 +224,16 @@ void DriveMovement::PrepareExtruder(const DDA& dda, const PrepParams& params, bo
 		twoDistanceToStopTimesCsquaredDivA =
 			initialDecelSpeedTimesCdivASquared + (uint64_t)(((params.decelStartDistance + accelCompensationDistance) * (DDA::stepClockRateSquared * 2))/dda.acceleration);
 
+		// Calculate the move distance to the point of zero speed, where reverse motion starts
 		const float initialDecelSpeed = dda.topSpeed - dda.acceleration * compensationTime;
 		const float reverseStartDistance = (initialDecelSpeed > 0.0)
 												? fsquare(initialDecelSpeed)/(2 * dda.acceleration) + params.decelStartDistance
 												: params.decelStartDistance;
-
 		// Reverse phase parameters
-		if (reverseStartDistance >= dda.totalDistance + compensationDistance)
+		if (reverseStartDistance >= dda.totalDistance)
 		{
 			// No reverse phase
-			totalSteps = (uint)max<int32_t>(netSteps, 0);
+			totalSteps = (uint32_t)max<int32_t>(netSteps, 0);
 			reverseStartStep = netSteps + 1;
 			mp.cart.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA = 0;
 		}
@@ -152,7 +253,7 @@ void DriveMovement::PrepareExtruder(const DDA& dda, const PrepParams& params, bo
 			}
 			else
 			{
-				totalSteps = (uint)max<int32_t>(netSteps, 0);
+				totalSteps = (uint32_t)max<int32_t>(netSteps, 0);
 				reverseStartStep = totalSteps + 1;
 				mp.cart.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA = 0;
 			}
@@ -164,23 +265,23 @@ void DriveMovement::DebugPrint(char c, bool isDeltaMovement) const
 {
 	if (state != DMState::idle)
 	{
-		debugPrintf("DM%c%s dir=%c steps=%u next=%u rev=%u interval=%u sstcda=%u "
-					"acmadtcdts=%d tstcdapdsc=%u 2dtstc2diva=%" PRIu64 "\n",
+		debugPrintf("DM%c%s dir=%c steps=%" PRIu32 " next=%" PRIu32 " rev=%" PRIu32 " interval=%" PRIu32 " sstcda=%" PRIu32 " "
+					"acmadtcdts=%" PRIi32 " tstcdapdsc=%" PRIu32 " 2dtstc2diva=%" PRIu64 "\n",
 					c, (state == DMState::stepError) ? " ERR:" : ":", (direction) ? 'F' : 'B', totalSteps, nextStep, reverseStartStep, stepInterval, startSpeedTimesCdivA,
 					accelClocksMinusAccelDistanceTimesCdivTopSpeed, topSpeedTimesCdivAPlusDecelStartClocks, twoDistanceToStopTimesCsquaredDivA);
 
 		if (isDeltaMovement)
 		{
-			debugPrintf("hmz0sK=%d minusAaPlusBbTimesKs=%d dSquaredMinusAsquaredMinusBsquared=%" PRId64 "\n"
-						"2c2mmsdak=%u asdsk=%u dsdsk=%u mmstcdts=%u\n",
+			debugPrintf("hmz0sK=%" PRIi32 " minusAaPlusBbTimesKs=%" PRIi32 " dSquaredMinusAsquaredMinusBsquared=%" PRId64 "\n"
+						"2c2mmsdak=%" PRIu32 " asdsk=%" PRIu32 " dsdsk=%" PRIu32 " mmstcdts=%" PRIu32 "\n",
 						mp.delta.hmz0sK, mp.delta.minusAaPlusBbTimesKs, mp.delta.dSquaredMinusAsquaredMinusBsquaredTimesKsquaredSsquared,
 						mp.delta.twoCsquaredTimesMmPerStepDivAK, mp.delta.accelStopDsK, mp.delta.decelStartDsK, mp.delta.mmPerStepTimesCdivtopSpeedK
 						);
 		}
 		else
 		{
-			debugPrintf("accelStopStep=%u decelStartStep=%u 2CsqtMmPerStepDivA=%" PRIu64 "\n"
-						"mmPerStepTimesCdivtopSpeed=%u fmsdmtstdca2=%" PRId64 "\n",
+			debugPrintf("accelStopStep=%" PRIu32 " decelStartStep=%" PRIu32 " 2CsqtMmPerStepDivA=%" PRIu64 "\n"
+						"mmPerStepTimesCdivtopSpeed=%" PRIu32 " fmsdmtstdca2=%" PRId64 "\n",
 						mp.cart.accelStopStep, mp.cart.decelStartStep, mp.cart.twoCsquaredTimesMmPerStepDivA,
 						mp.cart.mmPerStepTimesCdivtopSpeed, mp.cart.fourMaxStepDistanceMinusTwoDistanceToStopTimesCsquaredDivA
 						);
@@ -199,6 +300,7 @@ bool DriveMovement::CalcNextStepTimeCartesianFull(const DDA &dda, bool live)
 pre(nextStep < totalSteps; stepsTillRecalc == 0)
 {
 	// Work out how many steps to calculate at a time.
+	// The last step before reverseStartStep must be single stepped to make sure that we don't reverse the direction too soon.
 	uint32_t shiftFactor = 0;		// assume single stepping
 	if (stepInterval < DDA::MinCalcIntervalCartesian)
 	{
@@ -251,7 +353,7 @@ pre(nextStep < totalSteps; stepsTillRecalc == 0)
 			direction = !direction;
 			if (live)
 			{
-				reprap.GetPlatform()->SetDirection(drive, direction);
+				reprap.GetPlatform().SetDirection(drive, direction);
 			}
 		}
 		nextStepTime = topSpeedTimesCdivAPlusDecelStartClocks
@@ -287,6 +389,7 @@ bool DriveMovement::CalcNextStepTimeDeltaFull(const DDA &dda, bool live)
 pre(nextStep < totalSteps; stepsTillRecalc == 0)
 {
 	// Work out how many steps to calculate at a time.
+	// The last step before reverseStartStep must be single stepped to make sure that we don't reverse the direction too soon.
 	// The simulator suggests that at 200steps/mm, the minimum step pulse interval for 400mm/sec movement is 4.5us
 	uint32_t shiftFactor = 0;		// assume single stepping
 	if (stepInterval < DDA::MinCalcIntervalDelta)
@@ -320,7 +423,7 @@ pre(nextStep < totalSteps; stepsTillRecalc == 0)
 		direction = false;
 		if (live)
 		{
-			reprap.GetPlatform()->SetDirection(drive, false);	// going down now
+			reprap.GetPlatform().SetDirection(drive, false);	// going down now
 		}
 	}
 

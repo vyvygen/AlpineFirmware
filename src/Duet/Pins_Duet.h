@@ -3,6 +3,14 @@
 
 #define FIRMWARE_NAME "RepRapFirmware for Duet"
 
+// Features definition
+#define HAS_LWIP_NETWORKING		1
+#define HAS_CPU_TEMP_SENSOR		1
+#define HAS_HIGH_SPEED_SD		1
+#define HAS_SMART_DRIVERS		0
+#define HAS_VOLTAGE_MONITOR		0
+#define ACTIVE_LOW_HEAT_ON		1
+
 const size_t NumFirmwareUpdateModules = 1;
 #define IAP_UPDATE_FILE "iap.bin"
 #define IAP_FIRMWARE_FILE "RepRapFirmware.bin"
@@ -12,28 +20,33 @@ const size_t NumFirmwareUpdateModules = 1;
 
 #define SUPPORT_INKJET		0					// set nonzero to support inkjet control
 #define SUPPORT_ROLAND		0					// set nonzero to support Roland mill
+#define SUPPORT_SCANNER		0					// set nonzero to support FreeLSS scanners
+#define SUPPORT_DHT_SENSOR	0					// set nonzero to support DHT temperature/humidity sensors
 
 // The physical capabilities of the machine
 
 const size_t DRIVES = 9;						// The number of drives in the machine, including X, Y, and Z plus extruder drives
-#define DRIVES_(a,b,c,d,e,f,g,h,i,j) { a,b,c,d,e,f,g,h,i }
-const size_t MaxDriversPerAxis = 4;				// The maximum number of stepper drivers assigned to one axis
+#define DRIVES_(a,b,c,d,e,f,g,h,i,j,k,l) { a,b,c,d,e,f,g,h,i }
 
-const int8_t HEATERS = 7;						// The number of heaters in the machine; 0 is the heated bed even if there isn't one
+const size_t Heaters = 7;						// The number of heaters in the machine; 0 is the heated bed even if there isn't one
 #define HEATERS_(a,b,c,d,e,f,g,h) { a,b,c,d,e,f,g }
 
-const size_t MAX_AXES = 6;						// The maximum number of movement axes in the machine, usually just X, Y and Z, <= DRIVES
-const size_t MIN_AXES = 3;						// The minimum and default number of axes
-const size_t MaxExtruders = DRIVES - MIN_AXES;	// The maximum number of extruders
+const size_t MinAxes = 3;						// The minimum and default number of axes
+const size_t MaxAxes = 6;						// The maximum number of movement axes in the machine, usually just X, Y and Z, <= DRIVES
+// Initialization macro used in statements needing to initialize values in arrays of size MAX_AXES
+#define AXES_(a,b,c,d,e,f,g,h,i) { a,b,c,d,e,f }
+
+const size_t MaxExtruders = DRIVES - MinAxes;	// The maximum number of extruders
+const size_t MaxDriversPerAxis = 4;				// The maximum number of stepper drivers assigned to one axis
 
 const size_t NUM_SERIAL_CHANNELS = 3;			// The number of serial IO channels (USB and two auxiliary UARTs)
 #define SERIAL_MAIN_DEVICE SerialUSB
 #define SERIAL_AUX_DEVICE Serial
 #define SERIAL_AUX2_DEVICE Serial1
 
-// The numbers of entries in each array must correspond with the values of DRIVES, AXES, or HEATERS. Set values to -1 to flag unavailability.
+// The numbers of entries in each array must correspond with the values of DRIVES, AXES, or HEATERS. Set values to NoPin to flag unavailability.
 
-// DRIVES
+// Drives
 
 const Pin ENABLE_PINS[DRIVES] = { 29, 27, X1, X0, 37, X8, 50, 47, X13 };
 const Pin STEP_PINS[DRIVES] = { 14, 25, 5, X2, 41, 39, X4, 49, X10 };
@@ -52,11 +65,8 @@ const float STEPPER_DAC_VOLTAGE_RANGE = 2.02;							// Stepper motor current ref
 const float STEPPER_DAC_VOLTAGE_OFFSET = -0.025;						// Stepper motor current offset voltage for E1 if using a DAC
 
 // HEATERS
-
-const bool HEAT_ON = false;												// false for inverted heater (e.g. Duet v0.6), true for not (e.g. Duet v0.4)
-
-const Pin TEMP_SENSE_PINS[HEATERS] = { 5, 4, 0, 7, 8, 9, 11 };			// Analogue pin numbers
-const Pin HEAT_ON_PINS[HEATERS] = { 6, X5, X7, 7, 8, 9, X17 };			// Heater Channel 7 (pin X17) is shared with Fan1
+const Pin TEMP_SENSE_PINS[Heaters] = { 5, 4, 0, 7, 8, 9, 11 };			// Analogue pin numbers
+const Pin HEAT_ON_PINS[Heaters] = { 6, X5, X7, 7, 8, 9, X17 };			// Heater Channel 7 (pin X17) is shared with Fan1
 
 // Default thermistor parameters
 // Bed thermistor: http://uk.farnell.com/epcos/b57863s103f040/sensor-miniature-ntc-10k/dp/1299930?Ntt=129-9930
@@ -112,7 +122,7 @@ const Pin COOLING_FAN_RPM_PIN = 23;										// Pin PA15
 
 // SD cards
 const size_t NumSdCards = 2;
-const Pin SdCardDetectPins[NumSdCards] = {13, NoPin};
+const Pin SdCardDetectPins[NumSdCards] = {NoPin, NoPin};				// Although the Duet PCB supports a CD pin, due to a bug in the SAM3X it is unusable if we enable the temperature sensor
 const Pin SdWriteProtectPins[NumSdCards] = {NoPin, NoPin};
 const Pin SdSpiCSPins[1] = {67};										// Pin PB16 Note: this clashes with inkjet support
 

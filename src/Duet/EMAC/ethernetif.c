@@ -55,8 +55,8 @@
 #include "lwip/src/include/netif/etharp.h"
 #include "lwip/src/include/netif/ppp_oe.h"
 
-#include "emac.h"
-#include "rstc.h"
+#include "emac/emac.h"
+#include "rstc/rstc.h"
 
 #include "ethernet_phy.h"
 #include "ethernetif.h"
@@ -204,8 +204,7 @@ void ethernetif_hardware_init(void)
 	/* Init EMAC driver structure */
 	emac_dev_init(EMAC, &gs_emac_dev, &emac_option);
 
-	/* Set IRQ priority */
-	NVIC_SetPriority(EMAC_IRQn, 4);
+	/* Set IRQ priority is now done in Platform.cpp because it has access to the priority definitions */
 
 	/* Enable Interrupt */
 	NVIC_EnableIRQ(EMAC_IRQn);
@@ -214,7 +213,6 @@ void ethernetif_hardware_init(void)
 	if (ethernet_phy_init(EMAC, BOARD_EMAC_PHY_ADDR, SystemCoreClock) != EMAC_OK)
 	{
 		LWIP_DEBUGF(LWIP_DBG_TRACE, ("PHY Initialize ERROR!\r"));
-		return;
 	}
 }
 
@@ -254,7 +252,7 @@ bool ethernetif_link_established(void)
 		LWIP_DEBUGF(LWIP_DBG_TRACE, ("PHY Register Read ERROR!\r"));
 		return false;
 	}       //  MII_LINK_STATUS       (1u << 2) /**< Link Status */
-	return (p_ul_reg_cont & (1u << 2)) ? true : false;
+	return (p_ul_reg_cont & (1u << 2)) != 0;
 }
 
 /**

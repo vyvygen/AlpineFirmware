@@ -16,27 +16,21 @@ class Socket
 {
 public:
 	Socket();
-	void Init(SocketNumber s, Port serverPort);
+	void Init(SocketNumber s, Port serverPort, Protocol p);
 	void TerminateAndDisable();
 	void Poll(bool full);
 	Port GetLocalPort() const { return localPort; }
 	uint32_t GetRemoteIP() const { return remoteIPAddress; }
 	Port GetRemotePort() const { return remotePort; }
-	bool IsConnected() const;
-	bool IsTerminated() const { return isTerminated; }
 	void Close();
 	void Terminate();
-	SocketNumber GetNumber() const { return socketNum; }
-	NetworkTransaction *GetTransaction() const { return currentTransaction; }
 	bool ReadChar(char& c);
-	bool ReadBuffer(const char *&buffer, size_t &len);
-	bool HasMoreDataToRead() const;
-	void ReleaseTransaction();
-	bool IsPersistentConnection() const { return persistConnection; }
-	bool CanWrite() const;
-	void DiscardReceivedData();
-	void ResetDataPointer();
-	bool AcquireTransaction();
+	bool ReadBuffer(const uint8_t *&buffer, size_t &len);
+	void Taken(size_t len);
+	bool CanRead() const;
+	bool CanSend() const;
+	size_t Send(const uint8_t *data, size_t length);
+	void Send();
 
 private:
 	enum class SocketState : uint8_t
@@ -46,24 +40,28 @@ private:
 		listening,
 		connected,
 		clientDisconnecting,
-		closing
+		closing,
+		aborted
 	};
 
 	void ReInit();
-	bool IsSending() const;								// Return true if we are in the sending phase
-
-	bool TrySendData()									// Try to send data, returning true if all data has been sent and we ought to close the socket
-	pre(IsSending());
+	void ReceiveData();
+	void DiscardReceivedData();
 
 	Port localPort, remotePort;							// The local and remote ports
+	Protocol protocol;									// What protocol this socket is for
 	uint32_t remoteIPAddress;							// The remote IP address
-	NetworkTransaction *currentTransaction;				// The transaction currently being processed on this socket
 	NetworkBuffer *receivedData;						// List of buffers holding received data
+	//invariant(!receivedData->IsEmpty())
+	uint32_t whenConnected;
 	bool persistConnection;								// Do we expect this connection to stay alive?
 	bool isTerminated;									// Will be true if the connection has gone down unexpectedly (TCP RST)
 	SocketNumber socketNum;								// The W5500 socket number we are using
 	SocketState state;
+	bool sendOutstanding;								// True if we have written data to the socket but not flushed it
 	bool isSending;										// True if we have written data to the W5500 to send and have not yet seen success or timeout
+	uint16_t wizTxBufferPtr;							// Current offset into the Wizchip send buffer, if sendOutstanding is true
+	uint16_t wizTxBufferLeft;							// Transmit buffer space left, if sendOutstanding is true
 };
 
 #endif /* SRC_DUETNG_DUETETHERNET_SOCKET_H_ */

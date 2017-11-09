@@ -3,6 +3,14 @@
 
 #define FIRMWARE_NAME "RepRapFirmware for RADDS"
 
+// Features definition
+#define HAS_LWIP_NETWORKING		0
+#define HAS_CPU_TEMP_SENSOR		0				// enabling the CPU temperature sensor disables Due pin 13 due to bug in SAM3X
+#define HAS_HIGH_SPEED_SD		0
+#define HAS_SMART_DRIVERS		0
+#define HAS_VOLTAGE_MONITOR		0
+#define ACTIVE_LOW_HEAT_ON		0
+
 const size_t NumFirmwareUpdateModules = 1;
 #define IAP_UPDATE_FILE "iapradds.bin"
 #define IAP_FIRMWARE_FILE "RepRapFirmware-RADDS.bin"
@@ -13,28 +21,35 @@ const size_t NumFirmwareUpdateModules = 1;
 
 #define SUPPORT_INKJET		0					// set nonzero to support inkjet control
 #define SUPPORT_ROLAND		0					// set nonzero to support Roland mill
+#define SUPPORT_SCANNER		0					// set nonzero to support FreeLSS scanners
+#define SUPPORT_IOBITS		0					// set to support P parameter in G0/G1 commands
+#define SUPPORT_DHT_SENSOR	0					// set nonzero to support DHT temperature/humidity sensors
 
 // The physical capabilities of the machine
 
 // The number of drives in the machine, including X, Y, and Z plus extruder drives
-const size_t DRIVES = 8;
+const size_t DRIVES = 9;
 
 // Initialization macro used in statements needing to initialize values in arrays of size DRIVES.  E.g.,
-// max_feed_rates[DRIVES] = {DRIVES_(1, 1, 1, 1, 1, 1, 1, 1, 1)}
-#define DRIVES_(a,b,c,d,e,f,g,h,i,j) { a,b,c,d,e,f,g,h }
-const size_t MaxDriversPerAxis = 4;				// The maximum number of stepper drivers assigned to one axis
+// max_feed_rates[DRIVES] = {DRIVES_(1, 1, 1, 1, 1, 1, 1, 1, 1, 1)}
+#define DRIVES_(a,b,c,d,e,f,g,h,i,j,k,l) { a,b,c,d,e,f,g,h,i }
 
 // The number of heaters in the machine
 // 0 is the heated bed even if there isn't one.
-const int8_t HEATERS = 4;
+const size_t Heaters = 4;
 
 // Initialization macro used in statements needing to initialize values in arrays of size HEATERS.  E.g.,
 // defaultPidKis[HEATERS] = {HEATERS_(5.0, 0.1, 0.1, 0.1, 0.1, 0.1)};
 #define HEATERS_(a,b,c,d,e,f,g,h) { a,b,c,d }
 
-const size_t MAX_AXES = 6;						// The maximum number of movement axes in the machine, usually just X, Y and Z, <= DRIVES
+const size_t MinAxes = 3;						// The minimum and default number of axes
+const size_t MaxAxes = 6;						// The maximum number of movement axes in the machine, usually just X, Y and Z, <= DRIVES
+// Initialization macro used in statements needing to initialize values in arrays of size MAX_AXES
+#define AXES_(a,b,c,d,e,f,g,h,i) { a,b,c,d,e,f }
+
 const size_t MIN_AXES = 3;						// The minimum and default number of axes
 const size_t MaxExtruders = DRIVES - MIN_AXES;	// The maximum number of extruders
+const size_t MaxDriversPerAxis = 4;				// The maximum number of stepper drivers assigned to one axis
 
 const size_t NUM_SERIAL_CHANNELS = 2;
 // Use TX0/RX0 for the auxiliary serial line
@@ -43,11 +58,11 @@ const size_t NUM_SERIAL_CHANNELS = 2;
 
 // The numbers of entries in each array must correspond with the values of DRIVES, AXES, or HEATERS. Set values to NoPin to flag unavailability.
 // DRIVES
-//                                    X   Y   Z  E1  E2  E3  E4  E5
-const Pin ENABLE_PINS[DRIVES] =    { 26, 22, 15, 62, 65, 49, 37, 31 };
-//                                  A15 D04 B25 A02 B19 C12 C03 D06
-const Pin STEP_PINS[DRIVES] =      { 24, 17,  2, 61, 64, 51, 35, 29 };
-const Pin DIRECTION_PINS[DRIVES] = { 23, 16,  3, 60, 63, 53, 33, 27 };
+//                                    X   Y   Z  E1  E2  E3  E4  E5  E6
+const Pin ENABLE_PINS[DRIVES] =    { 26, 22, 15, 62, 65, 49, 37, 31, 68 };
+//                                   A15 A12 A09 A02 B19 C12 C03 D06 B16
+const Pin STEP_PINS[DRIVES] =      { 24, 17,  2, 61, 64, 51, 35, 29, 67 };
+const Pin DIRECTION_PINS[DRIVES] = { 23, 16,  3, 60, 63, 53, 33, 27, 66 };
 
 // Endstops
 // E Stops not currently used
@@ -66,19 +81,15 @@ const Pin END_STOP_PINS[DRIVES] = { 28, 30, 32, 39, NoPin, NoPin, NoPin, NoPin }
 
 // HEATERS - The bed is assumed to be the at index 0
 
-// 0 for inverted heater (e.g. Duet v0.6)
-// 1 for not (e.g. Duet v0.4; RADDS)
-const bool HEAT_ON = true;
-
 // Analogue pin numbers
-const Pin TEMP_SENSE_PINS[HEATERS] = HEATERS_(4, 0, 1, 2, e, f, g, h);
+const Pin TEMP_SENSE_PINS[Heaters] = HEATERS_(4, 0, 1, 2, e, f, g, h);
 
 // Heater outputs
 // Bed PMW: D7 has hardware PWM so bed has PWM
 // h0, h1 PMW: D13 & D12 are on TIOB0 & B8 which are both TC B channels, so they get PWM
 // h2 bang-bang: D11 is on TIOA8 which is a TC A channel shared with h1, it gets bang-bang control
 
-const Pin HEAT_ON_PINS[HEATERS] = HEATERS_(7, 13, 12, 11, e, f, g, h); // bed, h0, h1, h2
+const Pin HEAT_ON_PINS[Heaters] = HEATERS_(7, 13, 12, 11, e, f, g, h); // bed, h0, h1, h2
 
 // Default thermistor betas
 const float BED_R25 = 10000.0;
@@ -132,10 +143,10 @@ const Pin SdSpiCSPins[2] = { 87, 77 };
 // ### Removed: now E0_AXIS endstop D39 / PWMH2  / C.7
 // D58 / AD3    / A.6
 // D59 / AD2    / A.4
-// D66 / DAC0   / B.15
-// D67 / DAC1   / B.16
-// D68 / CANRX0 / A.1
-// D69 / CANTX0 / A.0
+// ### Removed: now E6_DIR ExtV3 D66 / DAC0   / B.15
+// ### Removed: now E6_STP ExtV3 D67 / DAC1   / B.16
+// ### Removed: now E6_EN ExtV3 D68 / CANRX0 / A.1
+// ### Removed: now MSi(=3.3V) ExtV3 D69 / CANTX0 / A.0
 // D70 / SDA1   / A.17
 // D71 / SCL1   / A.18
 // D72 / RX LED / C.30
@@ -146,7 +157,7 @@ const Pin SdSpiCSPins[2] = { 87, 77 };
 const Pin SpecialPinMap[] =
 {
 	5, 6, 58, 59,
-	66, 67, 68, 69, 70, 71, 73, 73
+	70, 71, 72, 73
 };
 
 // This next definition defines the highest one.

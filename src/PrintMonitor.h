@@ -22,10 +22,10 @@ Licence: GPL
 
 #include "RepRapFirmware.h"
 
-const FilePosition GCODE_HEADER_SIZE = 8192uL;		// How many bytes to read from the header
+const FilePosition GCODE_HEADER_SIZE = 20000uL;		// How many bytes to read from the header - I (DC) have a Kisslicer file with a layer height comment 14Kb from the start
 const FilePosition GCODE_FOOTER_SIZE = 400000uL;	// How many bytes to read from the footer
 
-#ifdef DUET_NG
+#if SAM4E || SAM4S
 const size_t GCODE_READ_SIZE = 4096;				// How many bytes to read in one go in GetFileInfo() (should be a multiple of 512 for read efficiency)
 #else
 const size_t GCODE_READ_SIZE = 1024;				// How many bytes to read in one go in GetFileInfo() (should be a multiple of 512 for read efficiency)
@@ -37,7 +37,7 @@ const float LAYER_HEIGHT_TOLERANCE = 0.015;			// Tolerance for comparing two Z h
 
 const size_t MAX_LAYER_SAMPLES = 5;					// Number of layer samples for end-time estimation (except for first layer)
 const float ESTIMATION_MIN_FILAMENT_USAGE = 0.01;	// Minimum per cent of filament to be printed before the filament-based estimation returns values
-const float ESTIMATION_MIN_FILE_USAGE = 0.001;		// Minium per cent of the file to be processed before any file-based estimations are made
+const float ESTIMATION_MIN_FILE_USAGE = 0.001;		// Minimum per cent of the file to be processed before any file-based estimations are made
 const float FIRST_LAYER_SPEED_FACTOR = 0.25;		// First layer speed factor compared to other layers (only for layer-based estimation)
 
 const uint32_t PRINTMONITOR_UPDATE_INTERVAL = 200;	// Update interval in milliseconds
@@ -58,7 +58,7 @@ struct GCodeFileInfo
 	time_t lastModifiedTime;
 	float firstLayerHeight;
 	float objectHeight;
-	float filamentNeeded[DRIVES - MIN_AXES];
+	float filamentNeeded[MaxExtruders];
 	unsigned int numFilaments;
 	float layerHeight;
 	char generatedBy[50];
@@ -74,7 +74,7 @@ enum FileParseState
 class PrintMonitor
 {
 	public:
-		PrintMonitor(Platform *p, GCodes *gc);
+		PrintMonitor(Platform& p, GCodes& gc);
 		void Spin();
 		void Init();
 
@@ -99,10 +99,12 @@ class PrintMonitor
 		float GetFirstLayerDuration() const;
 		float GetFirstLayerHeight() const;
 
+		const char *GetPrintingFilename() const { return (isPrinting) ? filenameBeingPrinted : nullptr; }
+
 	private:
-		Platform *platform;
-		GCodes *gCodes;
-		float longWait;
+		Platform& platform;
+		GCodes& gCodes;
+		uint32_t longWait;
 		uint32_t lastUpdateTime;
 
 		// Information/Events concerning the file being printed
@@ -111,8 +113,8 @@ class PrintMonitor
 		void LayerComplete();
 
 		bool isPrinting;
-		float printStartTime;
-		float pauseStartTime, totalPauseTime;
+		uint64_t printStartTime;
+		uint64_t pauseStartTime, totalPauseTime;
 
 		bool heatingUp;
 		unsigned int currentLayer;

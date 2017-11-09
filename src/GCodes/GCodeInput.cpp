@@ -11,34 +11,24 @@
 #include "GCodes.h"
 
 
-// G-code input class for wrapping around Stream-based hardware ports
-
-void StreamGCodeInput::Reset()
+bool GCodeInput::FillBuffer(GCodeBuffer *gb)
 {
-	while (device.available() > 0)
+	const size_t bytesToPass = min<size_t>(BytesCached(), GCODE_LENGTH);
+	for (size_t i = 0; i < bytesToPass; i++)
 	{
-		device.read();
-	}
-}
+		const char c = ReadByte();
 
-bool StreamGCodeInput::FillBuffer(GCodeBuffer *gb)
-{
-	size_t bytesToPass = min<size_t>(device.available(), GCODE_LENGTH);
-	for(size_t i = 0; i < bytesToPass; i++)
-	{
-		char c = static_cast<char>(device.read());
-
-		if (gb->WritingFileDirectory() == reprap.GetPlatform()->GetWebDir())
+		if (gb->IsWritingBinary())
 		{
 			// HTML uploads are handled by the GCodes class
-			reprap.GetGCodes()->WriteHTMLToFile(*gb, c);
+			reprap.GetGCodes().WriteHTMLToFile(*gb, c);
 		}
 		else if (gb->Put(c))
 		{
 			// Check if we can finish a file upload
 			if (gb->WritingFileDirectory() != nullptr)
 			{
-				reprap.GetGCodes()->WriteGCodeToFile(*gb);
+				reprap.GetGCodes().WriteGCodeToFile(*gb);
 				gb->SetFinished(true);
 			}
 
@@ -50,6 +40,21 @@ bool StreamGCodeInput::FillBuffer(GCodeBuffer *gb)
 	return false;
 }
 
+// G-code input class for wrapping around Stream-based hardware ports
+
+void StreamGCodeInput::Reset()
+{
+	while (device.available() > 0)
+	{
+		device.read();
+	}
+}
+
+char StreamGCodeInput::ReadByte()
+{
+	return static_cast<char>(device.read());
+}
+
 size_t StreamGCodeInput::BytesCached() const
 {
 	return device.available();
@@ -57,7 +62,6 @@ size_t StreamGCodeInput::BytesCached() const
 
 
 // Dynamic G-code input class for caching codes from software-defined sources
-
 
 RegularGCodeInput::RegularGCodeInput(bool removeComments): stripComments(removeComments),
 	state(GCodeInputState::idle), buffer(reinterpret_cast<char * const>(buf32)), writingPointer(0), readingPointer(0)
@@ -70,40 +74,16 @@ void RegularGCodeInput::Reset()
 	writingPointer = readingPointer = 0;
 }
 
-bool RegularGCodeInput::FillBuffer(GCodeBuffer *gb)
+char RegularGCodeInput::ReadByte()
 {
-	size_t bytesToPass = min<size_t>(BytesCached(), GCODE_LENGTH);
-	for(size_t i = 0; i < bytesToPass; i++)
+	char c = buffer[readingPointer++];
+	if (readingPointer == GCodeInputBufferSize)
 	{
-		// Get a char from the buffer
-		char c = buffer[readingPointer++];
-		if (readingPointer == GCodeInputBufferSize)
-		{
-			readingPointer = 0;
-		}
-
-		// Pass it on to the GCodeBuffer
-		if (gb->WritingFileDirectory() == reprap.GetPlatform()->GetWebDir())
-		{
-			// HTML uploads are handled by the GCodes class
-			reprap.GetGCodes()->WriteHTMLToFile(*gb, c);
-		}
-		else if (gb->Put(c))
-		{
-			// Check if we can finish a file upload
-			if (gb->WritingFileDirectory() != nullptr)
-			{
-				reprap.GetGCodes()->WriteGCodeToFile(*gb);
-				gb->SetFinished(true);
-			}
-
-			// Code is complete, stop here
-			return true;
-		}
+		readingPointer = 0;
 	}
-
-	return false;
+	return c;
 }
+
 
 size_t RegularGCodeInput::BytesCached() const
 {
@@ -153,43 +133,19 @@ void RegularGCodeInput::Put(MessageType mtype, const char c)
 			break;
 
 		case GCodeInputState::doingMCode:
-			if (c == '1')
-			{
-				state = GCodeInputState::doingMCode1;
-			}
+			state = (c == '1') ? GCodeInputState::doingMCode1 : GCodeInputState::doingCode;
 			break;
 
 		case GCodeInputState::doingMCode1:
-			if (c == '1')
-			{
-				state = GCodeInputState::doingMCode11;
-			}
-			else if (c == '2')
-			{
-				state = GCodeInputState::doingMCode12;
-			}
-			else
-			{
-				state = GCodeInputState::doingCode;
-			}
+			state = (c == '1') ? GCodeInputState::doingMCode11: (c == '2') ? GCodeInputState::doingMCode12 : GCodeInputState::doingCode;
 			break;
 
 		case GCodeInputState::doingMCode11:
-			if (c == '2')
-			{
-				state = GCodeInputState::doingMCode112;
-				break;
-			}
-			state = GCodeInputState::doingCode;
+			state = (c == '2') ? GCodeInputState::doingMCode112 : GCodeInputState::doingCode;
 			break;
 
 		case GCodeInputState::doingMCode12:
-			if (c == '2')
-			{
-				state = GCodeInputState::doingMCode122;
-				break;
-			}
-			state = GCodeInputState::doingCode;
+			state = (c == '2') ? GCodeInputState::doingMCode122 : GCodeInputState::doingCode;
 			break;
 
 		case GCodeInputState::doingMCode112:
@@ -197,7 +153,7 @@ void RegularGCodeInput::Put(MessageType mtype, const char c)
 			{
 				// Emergency stop requested - perform it now
 				reprap.EmergencyStop();
-				reprap.GetGCodes()->Reset();
+				reprap.GetGCodes().Reset();
 
 				// But don't run it twice
 				Reset();
@@ -266,6 +222,15 @@ void FileGCodeInput::Reset()
 	RegularGCodeInput::Reset();
 }
 
+// Reset this input. Should be called when a specific G-code or macro file is closed outside of the reading context
+void FileGCodeInput::Reset(const FileData &file)
+{
+	if (file.f == lastFile)
+	{
+		Reset();
+	}
+}
+
 // Read another chunk of G-codes from the file and return true if more data is available
 bool FileGCodeInput::ReadFromFile(FileData &file)
 {
@@ -320,3 +285,4 @@ bool FileGCodeInput::ReadFromFile(FileData &file)
 	return bytesCached > 0;
 }
 
+// End
